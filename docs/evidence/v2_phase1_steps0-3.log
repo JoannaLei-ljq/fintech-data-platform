@@ -1,0 +1,157 @@
+### V2 Phase 1, Steps 0-3 verification 2026-11-07T23:56:01Z on branch v2-phase1
+
+### 1. pytest (tests/v2)
+test_db_guard.py::test_migrations_never_touch_protected_databases[fintech_oltp] PASSED [  1%]
+test_db_guard.py::test_migrations_never_touch_protected_databases[fintech_analytics] PASSED [  3%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[demo_oltp] PASSED [  4%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[postgres] PASSED [  6%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[airflow] PASSED [  7%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[v2] PASSED [  9%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[V2_oltp] PASSED [ 10%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[xv2_oltp] PASSED [ 12%]
+test_db_guard.py::test_migrations_accept_v2_databases[v2_oltp] PASSED [ 13%]
+test_db_guard.py::test_migrations_accept_v2_databases[v2_analytics] PASSED [ 15%]
+test_db_guard.py::test_migrations_accept_v2_databases[v2_test_x] PASSED [ 16%]
+test_db_guard.py::test_sync_rejects_protected_target_without_override PASSED [ 18%]
+test_db_guard.py::test_sync_override_requires_exact_value PASSED [ 19%]
+test_db_guard.py::test_sync_accepts_demo_and_v2_targets[demo_analytics] PASSED [ 21%]
+test_db_guard.py::test_sync_accepts_demo_and_v2_targets[v2_analytics] PASSED [ 22%]
+test_db_guard.py::test_sync_cli_refuses_protected_target_before_connecting PASSED [ 24%]
+test_lifecycle.py::test_status_mapping_and_lifecycle_fields PASSED [ 25%]
+test_lifecycle.py::test_migrations_preserve_updated_at_and_amounts PASSED [ 27%]
+test_lifecycle.py::test_legacy_view_reproduces_mvp_statuses PASSED [ 28%]
+test_lifecycle.py::test_backfilled_event_history PASSED         [ 30%]
+test_lifecycle.py::test_event_state_reconciles_with_transactions PASSED [ 31%]
+test_lifecycle.py::test_backfill_event_ids_are_stable_uuid_v5 PASSED [ 33%]
+test_lifecycle.py::test_payment_events_are_append_only[UPDATE payment_events SET occurred_at = now() WHERE transaction_id = 3001] PASSED [ 34%]
+test_lifecycle.py::test_payment_events_are_append_only[DELETE FROM payment_events WHERE transaction_id = 3001] PASSED [ 36%]
+test_lifecycle.py::test_payment_events_are_append_only[TRUNCATE payment_events] PASSED [ 37%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[amount_minor = 1] PASSED [ 39%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[currency = 'EUR'] PASSED [ 40%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[user_id = 2] PASSED [ 42%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[merchant_id = 101] PASSED [ 43%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[created_at = now()] PASSED [ 45%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[transaction_id = 9999] PASSED [ 46%]
+test_lifecycle.py::test_lifecycle_checks_reject_inconsistent_state PASSED [ 48%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides0-UniqueViolation] PASSED [ 50%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides1-UniqueViolation] PASSED [ 51%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides2-CheckViolation] PASSED [ 53%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides3-CheckViolation] PASSED [ 54%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides4-CheckViolation] PASSED [ 56%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides5-CheckViolation] PASSED [ 57%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides6-CheckViolation] PASSED [ 59%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides7-CheckViolation] PASSED [ 60%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides8-ForeignKeyViolation] PASSED [ 62%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides9-ForeignKeyViolation] PASSED [ 63%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides10-CheckViolation] PASSED [ 65%]
+test_lifecycle.py::test_valid_event_insert_and_duplicate_event_id PASSED [ 66%]
+test_lifecycle.py::test_relationships_are_preserved PASSED      [ 68%]
+test_migrations.py::test_applies_all_and_records_checksums PASSED [ 69%]
+test_migrations.py::test_rerun_is_a_noop PASSED                 [ 71%]
+test_migrations.py::test_target_version_stops_early PASSED      [ 72%]
+test_migrations.py::test_detects_edited_migration PASSED        [ 74%]
+test_migrations.py::test_failed_migration_leaves_no_trace PASSED [ 75%]
+test_migrations.py::test_applied_file_missing_is_an_error PASSED [ 77%]
+test_migrations.py::test_rejects_bad_migration_sets[names0] PASSED [ 78%]
+test_migrations.py::test_rejects_bad_migration_sets[names1] PASSED [ 80%]
+test_migrations.py::test_rejects_bad_migration_sets[names2] PASSED [ 81%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[fintech_oltp] PASSED [ 83%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[fintech_analytics] PASSED [ 84%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[demo_oltp] PASSED [ 86%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[postgres] PASSED [ 87%]
+test_migrations.py::test_v001_baseline_matches_mvp_schema[oltp-ddl0-migrations0] PASSED [ 89%]
+test_migrations.py::test_v001_baseline_matches_mvp_schema[analytics-ddl1-migrations1] PASSED [ 90%]
+test_money.py::test_currency_reference_data PASSED              [ 92%]
+test_money.py::test_multi_currency_amounts_convert_exactly PASSED [ 93%]
+test_money.py::test_unconvertible_data_aborts_whole_migration[bad_row0-not exactly representable] PASSED [ 95%]
+test_money.py::test_unconvertible_data_aborts_whole_migration[bad_row1-unknown currency code] PASSED [ 96%]
+test_money.py::test_new_rows_are_validated PASSED               [ 98%]
+test_money.py::test_mvp_demo_seed_converts PASSED               [100%]
+============================= 66 passed in 10.86s ==============================
+
+### 2. v2_oltp / v2_analytics migration status
+  oltp      applied  V001__baseline.sql
+  oltp      applied  V002__currencies_and_minor_units.sql
+  oltp      applied  V003__transaction_lifecycle.sql
+  oltp      applied  V004__payment_events.sql
+  analytics applied  V001__baseline.sql
+
+### 3. Backfill results in v2_oltp (MVP demo seed migrated V001 -> V004)
+ transaction_id |  status  | seq | amount_minor | currency |  failure_code  |     authorized_at      |      captured_at       |       failed_at        |       updated_at       
+----------------+----------+-----+--------------+----------+----------------+------------------------+------------------------+------------------------+------------------------
+           3001 | captured |   3 |        10000 | USD      |                | 2026-10-15 09:00:05+00 | 2026-10-15 09:00:05+00 |                        | 2026-10-15 09:00:05+00
+           3002 | captured |   3 |         5000 | USD      |                | 2026-10-15 10:30:04+00 | 2026-10-15 10:30:04+00 |                        | 2026-10-15 10:30:04+00
+           3003 | failed   |   2 |         3000 | USD      | legacy_unknown |                        |                        | 2026-10-15 12:00:03+00 | 2026-10-15 12:00:03+00
+           3004 | created  |   1 |         2000 | USD      |                |                        |                        |                        | 2026-10-15 15:00:00+00
+(4 rows)
+
+  tx  | seq |     event_type     | amount_minor |  failure_code  |       source       |      occurred_at       |               event_id               
+------+-----+--------------------+--------------+----------------+--------------------+------------------------+--------------------------------------
+ 3001 |   1 | payment.created    |        10000 |                | migration_backfill | 2026-10-15 09:00:00+00 | fa1f4590-075b-51ec-a5eb-5b5862758db0
+ 3001 |   2 | payment.authorized |        10000 |                | migration_backfill | 2026-10-15 09:00:05+00 | edc38c0b-4883-5ff9-9d81-114522fbf488
+ 3001 |   3 | payment.captured   |        10000 |                | migration_backfill | 2026-10-15 09:00:05+00 | f0e37c08-06c5-55d6-a752-f2be537ef65e
+ 3002 |   1 | payment.created    |         5000 |                | migration_backfill | 2026-10-15 10:30:00+00 | 7cc148bb-7d67-5fb1-8a0e-7ac3d9d32652
+ 3002 |   2 | payment.authorized |         5000 |                | migration_backfill | 2026-10-15 10:30:04+00 | 07776ab1-3537-5b56-942b-4c6b5d781f2c
+ 3002 |   3 | payment.captured   |         5000 |                | migration_backfill | 2026-10-15 10:30:04+00 | 4e268ac8-fbf7-5120-9f96-7c2b8551187f
+ 3003 |   1 | payment.created    |         3000 |                | migration_backfill | 2026-10-15 12:00:00+00 | 957b792a-69d0-5008-a0ee-e09253781542
+ 3003 |   2 | payment.failed     |              | legacy_unknown | migration_backfill | 2026-10-15 12:00:03+00 | cfb62bcd-8585-543b-9c13-92bb1fc602cf
+ 3004 |   1 | payment.created    |         2000 |                | migration_backfill | 2026-10-15 15:00:00+00 | 592ba8b4-15cb-5eb4-a3e0-11e6e1158441
+(9 rows)
+
+ transaction_id | user_id | merchant_id | amount | currency |  status   |       created_at       |       updated_at       
+----------------+---------+-------------+--------+----------+-----------+------------------------+------------------------
+           3001 |       1 |         102 | 100.00 | USD      | succeeded | 2026-10-15 09:00:00+00 | 2026-10-15 09:00:05+00
+           3002 |       2 |         101 |  50.00 | USD      | succeeded | 2026-10-15 10:30:00+00 | 2026-10-15 10:30:04+00
+           3003 |       3 |         101 |  30.00 | USD      | failed    | 2026-10-15 12:00:00+00 | 2026-10-15 12:00:03+00
+           3004 |       1 |         101 |  20.00 | USD      | pending   | 2026-10-15 15:00:00+00 | 2026-10-15 15:00:00+00
+(4 rows)
+
+ refund_id | transaction_id | amount_minor |  status   
+-----------+----------------+--------------+-----------
+      7001 |           3001 |         1000 | succeeded
+      7002 |           3001 |         2000 | succeeded
+(2 rows)
+
+### 4. MVP regression (scripts/run_acceptance.sh against demo_* only)
+### Acceptance run 2026-11-07T23:54:35Z
+### Versions: Airflow 3.3.2, dbt-core 1.12.5, PostgreSQL 16.15
+### Summary: 27 passed, 0 failed
+PASS  run 1 state  (Run state: success)
+PASS  run 1 success_amount  (150.00)
+PASS  run 1 success_rate_pct  (66.67)
+PASS  run 1 refund_amount  (30.00)
+PASS  run 1 transactions rows/distinct  (4/4)
+PASS  run 1 refunds rows/distinct  (2/2)
+PASS  run 1 summary on one UTC day  (1 2026-10-15)
+PASS  run 1 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 1 refunds not double counted (dbt test)  (1)
+PASS  run 1 refund amount checks (dbt test)  (1)
+PASS  run 2 state  (Run state: success)
+PASS  run 2 metrics, counts and checkpoint unchanged  (150.00 66.67 30.00 4 2 2026-10-15T15:00:00.000000/3004)
+PASS  run 3 state (expected to fail)  (Run state: failed)
+PASS  run 3 dbt_build did not run  (task dbt_build: upstream_failed)
+PASS  run 3 raw 3004 still pending (data rolled back)  (pending)
+PASS  run 3 transactions checkpoint unchanged (checkpoint rolled back)  (2026-10-15T15:00:00.000000/3004)
+PASS  run 3 summary still the pre-change value  (150.00 66.67)
+PASS  run 4 state  (Run state: success)
+PASS  run 4 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 4 transactions rows/distinct  (4/4)
+PASS  run 4 raw 3004 now succeeded  (succeeded)
+PASS  run 4 checkpoint advanced  (advanced)
+PASS  run 4 metrics still on original UTC day  (1 2026-10-15)
+PASS  run 4 success_amount  (170.00)
+PASS  run 4 success_rate_pct  (75.00)
+PASS  run 4 refund_amount  (30.00)
+PASS  main database untouched  (4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004)
+
+### 5. Protected databases: fingerprint before Step 0 vs after Step 3
+  IDENTICAL (all 9 tables in fintech_oltp / fintech_analytics)
+  fintech_oltp.users rows=3 md5=1c3de0c15966
+  fintech_oltp.merchants rows=2 md5=c5c0e2b37200
+  fintech_oltp.transactions rows=5 md5=7029cc7c13e1
+  fintech_oltp.refunds rows=2 md5=9a23cd461ec0
+  fintech_analytics.raw.users rows=3 md5=9b8b2b21be60
+  fintech_analytics.raw.merchants rows=2 md5=a85a4ce5dfab
+  fintech_analytics.raw.transactions rows=4 md5=deffdffafe26
+  fintech_analytics.raw.refunds rows=2 md5=568557846add
+  fintech_analytics.meta.sync_checkpoints rows=4 md5=52f206f12874

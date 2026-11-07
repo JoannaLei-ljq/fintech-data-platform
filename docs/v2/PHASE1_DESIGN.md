@@ -50,7 +50,9 @@ Ordering is handled in two distinct places, and they will be tested separately.
 |---|---|---|
 | `succeeded` | `captured` | Money moved. Synthetic events: created → authorized → captured. |
 | `failed` | `failed` | Synthetic events: created → failed, with `failure_code = 'legacy_unknown'`. |
-| `pending` | *see Step 3 decision below* | |
+| `pending` | `created` | Approved 2026-11-07. In the MVP, `pending` only meant "not yet decided" (README, `fct_daily_payments`), and `pending → succeeded` was a single jump. No authorization is recorded anywhere, and the demo row 3004 was never updated after insert (`updated_at = created_at`). Mapping to `authorized` would invent an event, so only `payment.created` is backfilled. Metric parity is unaffected, because V2 `pending_count = created + authorized`. |
+
+The MVP never recorded *when* authorization, capture or failure happened, only when the row last changed (`updated_at`). That timestamp is the latest moment those steps could have happened, so it is used for `authorized_at`, `captured_at` and `failed_at`. All backfilled events carry `source = 'migration_backfill'`, so they can be told apart from real ones.
 
 ## Implementation log
 
@@ -69,3 +71,32 @@ Ordering is handled in two distinct places, and they will be tested separately.
 - Pre-checks abort the migration on unknown currencies or amounts that aren't exactly representable. A round-trip assertion runs before `amount` is dropped.
 - The `set_updated_at` triggers are disabled during the backfill, so `updated_at` is preserved.
 - Adds the currency foreign key and `amount_minor > 0` checks, `minor_to_major()`, and the `legacy_transactions` / `legacy_refunds` views.
+
+### Step 3: lifecycle (`V003__transaction_lifecycle`, `V004__payment_events`)
+- **V003** maps statuses (see the table above) and adds `last_event_sequence`, `failure_code`, `authorized_at`, `captured_at` and `failed_at`. It also adds these CHECK constraints:
+  - status vocabulary;
+  - `failure_code` present if and only if the status is failed;
+  - status ↔ sequence (created 1, authorized 2, captured 3, failed 2 or 3);
+  - status ↔ timestamps;
+  - timestamp order.
+- **V003** also adds an immutability trigger on `transaction_id`, `user_id`, `merchant_id`, `amount_minor`, `currency` and `created_at`; foreign-key indexes; and `legacy_transactions` mapping back to the MVP vocabulary (created and authorized → `pending`).
+- **V004** adds `payment_events`, with:
+  - a UUID primary key;
+  - unique `(transaction_id, event_sequence)`;
+  - sequence 1 ⇔ `payment.created`;
+  - amount and currency only on non-failed events;
+  - `failure_code` only on failed events;
+  - `source` and `occurred_at`, with `received_at` defaulting to `clock_timestamp()`;
+  - append-only triggers covering UPDATE, DELETE and TRUNCATE.
+- **Backfill:** 9 events for the 4 demo payments. IDs are deterministic UUID v5 values, derived from the payment and its sequence number. A final assertion aborts the migration if history and current state disagree for any payment.
+
+### Deviations from the approved design
+1. **Step 3 is split into two migrations,** V003 (state) and V004 (history), to keep each one reviewable.
+2. **Foreign-key indexes were added in V003.** This addresses audit finding R14; it wasn't listed in Step 3.
+3. **Backfilled timestamps are approximate.** Lifecycle timestamps use `updated_at` as an upper bound, and backfilled `received_at` is the migration time (the true ingestion time).
+4. **The MVP sync now refuses `fintech_analytics` as a target** unless `FINTECH_ALLOW_PROTECTED_DB_WRITES=1` is set (Step 0 guard).
+
+### Known gaps until Step 4
+- **Transitions aren't enforced on direct updates yet.** A direct `UPDATE transactions` can still move a payment to any state allowed by the CHECK constraints without writing a matching event. Likewise, direct `INSERT`s into `payment_events` can leave sequence gaps. Contiguity, legal transitions, idempotent replays and keeping state and history in sync all belong to the Step 4 write path.
+- **Refunds still use the MVP vocabulary** (pending, succeeded, failed) and have no currency or idempotency key. That arrives in Step 5.
+- **`v2_analytics` is still at the V001 baseline.** Its schema changes come with the sync engine in Step 6.
