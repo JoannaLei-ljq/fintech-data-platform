@@ -54,4 +54,18 @@ Ordering is handled in two distinct places, and they will be tested separately.
 
 ## Implementation log
 
-See the sections below, which are filled in as each step lands.
+### Step 0: safety
+- Tagged `v0.1.0-mvp` and created branch `v2-phase1`.
+- Added `tools/db_guard.py` and the sync guard, `scripts/fingerprint_protected_dbs.sh`, and pytest scaffolding.
+
+### Step 1: migrations
+- `tools/migrate.py` runs each migration in its own transaction together with its `schema_migrations` row.
+- Applied files are re-verified by SHA-256 checksum on every run, and an advisory lock serialises concurrent runs.
+- `V001__baseline` is a frozen copy of the MVP DDL. A catalog-level test proves it equals the MVP schema.
+- `scripts/v2/reset_v2.sh` builds `v2_oltp` as V001, then the MVP demo seed, then the remaining migrations; it also builds `v2_analytics`.
+
+### Step 2: money (`V002__currencies_and_minor_units`)
+- Adds `currencies` with ISO 4217 minor units, plus `amount_minor` on transactions and refunds. A refund uses its payment's currency.
+- Pre-checks abort the migration on unknown currencies or amounts that aren't exactly representable. A round-trip assertion runs before `amount` is dropped.
+- The `set_updated_at` triggers are disabled during the backfill, so `updated_at` is preserved.
+- Adds the currency foreign key and `amount_minor > 0` checks, `minor_to_major()`, and the `legacy_transactions` / `legacy_refunds` views.
