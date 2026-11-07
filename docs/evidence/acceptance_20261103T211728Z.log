@@ -1,0 +1,273 @@
+### Acceptance run 2026-11-03T21:17:28Z
+### Versions: Airflow 3.3.2, dbt-core 1.12.5, PostgreSQL 16.15
+### Main database fintech_analytics before (transactions/refunds, checkpoint pk): 4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004
+
+### Step 0: reset demo databases
+Recreating demo_oltp and demo_analytics ...
+Demo source rows:
+  table_name  | count 
+--------------+-------
+ transactions |     4
+ refunds      |     2
+(2 rows)
+
+
+### Step 1: first DAG run
+Triggered fintech_demo_pipeline run_id=manual__20261103T211732Z conf={}
+Run state: success
+  task incremental_sync: success
+  task dbt_build: success
+  task report: success
+Logs: airflow/logs/dag_id=fintech_demo_pipeline/run_id=manual__20261103T211732Z/
+  [PASS] run 1 state: Run state: success
+== raw row counts (rows / distinct primary keys)
+  table_name  | rows | distinct_pk 
+--------------+------+-------------
+ transactions |    4 |           4
+ refunds      |    2 |           2
+(2 rows)
+
+== the $20 payment (3004) in raw
+ transaction_id | amount | status  |       created_at       |       updated_at       
+----------------+--------+---------+------------------------+------------------------
+           3004 |  20.00 | pending | 2026-10-15 15:00:00+00 | 2026-10-15 15:00:00+00
+(1 row)
+
+== sync checkpoints
+  table_name  |    last_updated_at     | last_pk | rows_last_run 
+--------------+------------------------+---------+---------------
+ merchants    | 2026-09-02 08:00:00+00 |     102 |             2
+ refunds      | 2026-10-15 20:00:12+00 |    7002 |             2
+ transactions | 2026-10-15 15:00:00+00 |    3004 |             4
+ users        | 2026-10-03 11:00:00+00 |       3 |             3
+(4 rows)
+
+== marts.fct_daily_payments
+ summary_date | currency | payment_count | succeeded_count | failed_count | pending_count | success_amount | success_rate_pct | refund_count | refund_amount | net_amount 
+--------------+----------+---------------+-----------------+--------------+---------------+----------------+------------------+--------------+---------------+------------
+ 2026-10-15   | USD      |             4 |               2 |            1 |             1 |         150.00 |            66.67 |            2 |         30.00 |     120.00
+(1 row)
+
+METRICS success_amount=150.00 success_rate_pct=66.67 refund_amount=30.00 summary_rows=1 summary_dates=2026-10-15 tx_rows=4 tx_distinct=4 refund_rows=2 refund_distinct=2 tx3004_status=pending ckpt_transactions=2026-10-15T15:00:00.000000/3004
+  [PASS] run 1 success_amount: 150.00
+  [PASS] run 1 success_rate_pct: 66.67
+  [PASS] run 1 refund_amount: 30.00
+  [PASS] run 1 transactions rows/distinct: 4/4
+  [PASS] run 1 refunds rows/distinct: 2/2
+  [PASS] run 1 summary on one UTC day: 1 2026-10-15
+  dbt tests:
+    PASS accepted_values_stg_refunds_status__pending__succeeded__failed
+    PASS accepted_values_stg_transactions_status__pending__succeeded__failed
+    PASS assert_payments_not_double_counted
+    PASS assert_refund_amounts_valid
+    PASS not_null_fct_daily_payments_currency
+    PASS not_null_fct_daily_payments_summary_date
+    PASS not_null_fct_daily_payments_summary_id
+    PASS not_null_stg_merchants_merchant_id
+    PASS not_null_stg_refunds_refund_id
+    PASS not_null_stg_refunds_transaction_id
+    PASS not_null_stg_transactions_merchant_id
+    PASS not_null_stg_transactions_transaction_id
+    PASS not_null_stg_transactions_user_id
+    PASS not_null_stg_users_user_id
+    PASS relationships_stg_refunds_transaction_id__transaction_id__ref_stg_transactions_
+    PASS relationships_stg_transactions_merchant_id__merchant_id__ref_stg_merchants_
+    PASS relationships_stg_transactions_user_id__user_id__ref_stg_users_
+    PASS unique_fct_daily_payments_summary_id
+    PASS unique_stg_merchants_merchant_id
+    PASS unique_stg_refunds_refund_id
+    PASS unique_stg_transactions_transaction_id
+    PASS unique_stg_users_user_id
+  dbt: Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27
+  [PASS] run 1 dbt build (models + 22 tests): Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27
+  [PASS] run 1 refunds not double counted (dbt test): 1
+  [PASS] run 1 refund amount checks (dbt test): 1
+
+### Step 2: re-run without source changes
+Triggered fintech_demo_pipeline run_id=manual__20261103T211747Z conf={}
+Run state: success
+  task incremental_sync: success
+  task dbt_build: success
+  task report: success
+Logs: airflow/logs/dag_id=fintech_demo_pipeline/run_id=manual__20261103T211747Z/
+  [PASS] run 2 state: Run state: success
+== raw row counts (rows / distinct primary keys)
+  table_name  | rows | distinct_pk 
+--------------+------+-------------
+ transactions |    4 |           4
+ refunds      |    2 |           2
+(2 rows)
+
+== the $20 payment (3004) in raw
+ transaction_id | amount | status  |       created_at       |       updated_at       
+----------------+--------+---------+------------------------+------------------------
+           3004 |  20.00 | pending | 2026-10-15 15:00:00+00 | 2026-10-15 15:00:00+00
+(1 row)
+
+== sync checkpoints
+  table_name  |    last_updated_at     | last_pk | rows_last_run 
+--------------+------------------------+---------+---------------
+ merchants    | 2026-09-02 08:00:00+00 |     102 |             0
+ refunds      | 2026-10-15 20:00:12+00 |    7002 |             0
+ transactions | 2026-10-15 15:00:00+00 |    3004 |             0
+ users        | 2026-10-03 11:00:00+00 |       3 |             0
+(4 rows)
+
+== marts.fct_daily_payments
+ summary_date | currency | payment_count | succeeded_count | failed_count | pending_count | success_amount | success_rate_pct | refund_count | refund_amount | net_amount 
+--------------+----------+---------------+-----------------+--------------+---------------+----------------+------------------+--------------+---------------+------------
+ 2026-10-15   | USD      |             4 |               2 |            1 |             1 |         150.00 |            66.67 |            2 |         30.00 |     120.00
+(1 row)
+
+METRICS success_amount=150.00 success_rate_pct=66.67 refund_amount=30.00 summary_rows=1 summary_dates=2026-10-15 tx_rows=4 tx_distinct=4 refund_rows=2 refund_distinct=2 tx3004_status=pending ckpt_transactions=2026-10-15T15:00:00.000000/3004
+  [PASS] run 2 metrics, counts and checkpoint unchanged: 150.00 66.67 30.00 4 2 2026-10-15T15:00:00.000000/3004
+  sync log:
+    2026-11-03 21:17:50,279 INFO users        synced 0 row(s); cursor=(2026-10-03 11:00:00+00:00, 3)
+    2026-11-03 21:17:50,281 INFO merchants    synced 0 row(s); cursor=(2026-09-02 08:00:00+00:00, 102)
+    2026-11-03 21:17:50,282 INFO transactions synced 0 row(s); cursor=(2026-10-15 15:00:00+00:00, 3004)
+    2026-11-03 21:17:50,284 INFO refunds      synced 0 row(s); cursor=(2026-10-15 20:00:12+00:00, 7002)
+
+### Step 3: source change, $20 payment 3004 pending -> succeeded
+UPDATE 1
+ transaction_id | amount |  status   |       created_at       |          updated_at           
+----------------+--------+-----------+------------------------+-------------------------------
+           3004 |  20.00 | succeeded | 2026-10-15 15:00:00+00 | 2026-11-03 21:17:58.603044+00
+(1 row)
+
+
+### Step 4: DAG run with failure injected before the transactions batch commits
+Triggered fintech_demo_pipeline run_id=manual__20261103T211758Z_fail_transactions conf={"fail_before_commit": "transactions"}
+Run state: failed
+  task incremental_sync: failed
+  task dbt_build: upstream_failed
+  task report: upstream_failed
+Logs: airflow/logs/dag_id=fintech_demo_pipeline/run_id=manual__20261103T211758Z_fail_transactions/
+  [PASS] run 3 state (expected to fail): Run state: failed
+  [PASS] run 3 dbt_build did not run: task dbt_build: upstream_failed
+  sync log:
+    2026-11-03 21:18:01,339 INFO users        synced 0 row(s); cursor=(2026-10-03 11:00:00+00:00, 3)
+    2026-11-03 21:18:01,341 INFO merchants    synced 0 row(s); cursor=(2026-09-02 08:00:00+00:00, 102)
+    InjectedFailure: injected failure before commit on transactions (1 row(s) pending)
+    Task failed with exception
+== raw row counts (rows / distinct primary keys)
+  table_name  | rows | distinct_pk 
+--------------+------+-------------
+ transactions |    4 |           4
+ refunds      |    2 |           2
+(2 rows)
+
+== the $20 payment (3004) in raw
+ transaction_id | amount | status  |       created_at       |       updated_at       
+----------------+--------+---------+------------------------+------------------------
+           3004 |  20.00 | pending | 2026-10-15 15:00:00+00 | 2026-10-15 15:00:00+00
+(1 row)
+
+== sync checkpoints
+  table_name  |    last_updated_at     | last_pk | rows_last_run 
+--------------+------------------------+---------+---------------
+ merchants    | 2026-09-02 08:00:00+00 |     102 |             0
+ refunds      | 2026-10-15 20:00:12+00 |    7002 |             0
+ transactions | 2026-10-15 15:00:00+00 |    3004 |             0
+ users        | 2026-10-03 11:00:00+00 |       3 |             0
+(4 rows)
+
+== marts.fct_daily_payments
+ summary_date | currency | payment_count | succeeded_count | failed_count | pending_count | success_amount | success_rate_pct | refund_count | refund_amount | net_amount 
+--------------+----------+---------------+-----------------+--------------+---------------+----------------+------------------+--------------+---------------+------------
+ 2026-10-15   | USD      |             4 |               2 |            1 |             1 |         150.00 |            66.67 |            2 |         30.00 |     120.00
+(1 row)
+
+METRICS success_amount=150.00 success_rate_pct=66.67 refund_amount=30.00 summary_rows=1 summary_dates=2026-10-15 tx_rows=4 tx_distinct=4 refund_rows=2 refund_distinct=2 tx3004_status=pending ckpt_transactions=2026-10-15T15:00:00.000000/3004
+  [PASS] run 3 raw 3004 still pending (data rolled back): pending
+  [PASS] run 3 transactions checkpoint unchanged (checkpoint rolled back): 2026-10-15T15:00:00.000000/3004
+  [PASS] run 3 summary still the pre-change value: 150.00 66.67
+
+### Step 5: recovery run
+Triggered fintech_demo_pipeline run_id=manual__20261103T211809Z conf={}
+Run state: success
+  task incremental_sync: success
+  task dbt_build: success
+  task report: success
+Logs: airflow/logs/dag_id=fintech_demo_pipeline/run_id=manual__20261103T211809Z/
+  [PASS] run 4 state: Run state: success
+  sync log:
+    2026-11-03 21:18:12,414 INFO users        synced 0 row(s); cursor=(2026-10-03 11:00:00+00:00, 3)
+    2026-11-03 21:18:12,415 INFO merchants    synced 0 row(s); cursor=(2026-09-02 08:00:00+00:00, 102)
+    2026-11-03 21:18:12,417 INFO transactions synced 1 row(s); cursor=(2026-11-03 21:17:58.603044+00:00, 3004)
+    2026-11-03 21:18:12,419 INFO refunds      synced 0 row(s); cursor=(2026-10-15 20:00:12+00:00, 7002)
+  [PASS] run 4 dbt build (models + 22 tests): Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27
+== raw row counts (rows / distinct primary keys)
+  table_name  | rows | distinct_pk 
+--------------+------+-------------
+ transactions |    4 |           4
+ refunds      |    2 |           2
+(2 rows)
+
+== the $20 payment (3004) in raw
+ transaction_id | amount |  status   |       created_at       |          updated_at           
+----------------+--------+-----------+------------------------+-------------------------------
+           3004 |  20.00 | succeeded | 2026-10-15 15:00:00+00 | 2026-11-03 21:17:58.603044+00
+(1 row)
+
+== sync checkpoints
+  table_name  |        last_updated_at        | last_pk | rows_last_run 
+--------------+-------------------------------+---------+---------------
+ merchants    | 2026-09-02 08:00:00+00        |     102 |             0
+ refunds      | 2026-10-15 20:00:12+00        |    7002 |             0
+ transactions | 2026-11-03 21:17:58.603044+00 |    3004 |             1
+ users        | 2026-10-03 11:00:00+00        |       3 |             0
+(4 rows)
+
+== marts.fct_daily_payments
+ summary_date | currency | payment_count | succeeded_count | failed_count | pending_count | success_amount | success_rate_pct | refund_count | refund_amount | net_amount 
+--------------+----------+---------------+-----------------+--------------+---------------+----------------+------------------+--------------+---------------+------------
+ 2026-10-15   | USD      |             4 |               3 |            1 |             0 |         170.00 |            75.00 |            2 |         30.00 |     140.00
+(1 row)
+
+METRICS success_amount=170.00 success_rate_pct=75.00 refund_amount=30.00 summary_rows=1 summary_dates=2026-10-15 tx_rows=4 tx_distinct=4 refund_rows=2 refund_distinct=2 tx3004_status=succeeded ckpt_transactions=2026-11-03T21:17:58.603044/3004
+  [PASS] run 4 transactions rows/distinct: 4/4
+  [PASS] run 4 raw 3004 now succeeded: succeeded
+  [PASS] run 4 checkpoint advanced: advanced
+  [PASS] run 4 metrics still on original UTC day: 1 2026-10-15
+  [PASS] run 4 success_amount: 170.00
+  [PASS] run 4 success_rate_pct: 75.00
+  [PASS] run 4 refund_amount: 30.00
+
+### Contrast: naive payment-to-refund join (the bug the model avoids)
+ naive_success_amount | model_success_amount 
+----------------------+----------------------
+               270.00 |               170.00
+(1 row)
+
+### Main database fintech_analytics after: 4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004
+  [PASS] main database untouched: 4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004
+
+### Summary: 27 passed, 0 failed
+PASS  run 1 state  (Run state: success)
+PASS  run 1 success_amount  (150.00)
+PASS  run 1 success_rate_pct  (66.67)
+PASS  run 1 refund_amount  (30.00)
+PASS  run 1 transactions rows/distinct  (4/4)
+PASS  run 1 refunds rows/distinct  (2/2)
+PASS  run 1 summary on one UTC day  (1 2026-10-15)
+PASS  run 1 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 1 refunds not double counted (dbt test)  (1)
+PASS  run 1 refund amount checks (dbt test)  (1)
+PASS  run 2 state  (Run state: success)
+PASS  run 2 metrics, counts and checkpoint unchanged  (150.00 66.67 30.00 4 2 2026-10-15T15:00:00.000000/3004)
+PASS  run 3 state (expected to fail)  (Run state: failed)
+PASS  run 3 dbt_build did not run  (task dbt_build: upstream_failed)
+PASS  run 3 raw 3004 still pending (data rolled back)  (pending)
+PASS  run 3 transactions checkpoint unchanged (checkpoint rolled back)  (2026-10-15T15:00:00.000000/3004)
+PASS  run 3 summary still the pre-change value  (150.00 66.67)
+PASS  run 4 state  (Run state: success)
+PASS  run 4 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 4 transactions rows/distinct  (4/4)
+PASS  run 4 raw 3004 now succeeded  (succeeded)
+PASS  run 4 checkpoint advanced  (advanced)
+PASS  run 4 metrics still on original UTC day  (1 2026-10-15)
+PASS  run 4 success_amount  (170.00)
+PASS  run 4 success_rate_pct  (75.00)
+PASS  run 4 refund_amount  (30.00)
+PASS  main database untouched  (4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004)
+### Log saved to docs/evidence/acceptance_20261103T211728Z.log

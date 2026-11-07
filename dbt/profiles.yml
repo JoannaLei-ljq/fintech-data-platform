@@ -1,0 +1,14 @@
+# Same profile works on the host (127.0.0.1:5434) and inside Airflow (postgres:5432).
+# DBT_DBNAME defaults to the demo analytics database, never the main one.
+fintech:
+  target: demo
+  outputs:
+    demo:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5434') | as_number }}"
+      user: "{{ env_var('POSTGRES_USER') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('DBT_DBNAME', 'demo_analytics') }}"
+      schema: staging
+      threads: 4

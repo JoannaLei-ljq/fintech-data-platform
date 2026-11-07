@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Replicas of the OLTP tables, loaded by sync/incremental_sync.py.
+    schema: raw
+    tables:
+      - name: users
+      - name: merchants
+      - name: transactions
+      - name: refunds

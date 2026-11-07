@@ -1,0 +1,26 @@
+# Secrets: only the template is tracked
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+.venv-dbt/
+__pycache__/
+*.pyc
+
+# dbt generated artifacts
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+
+# Runtime logs (the curated evidence logs stay tracked)
+airflow/logs/
+*.log
+!docs/evidence/*.log
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/

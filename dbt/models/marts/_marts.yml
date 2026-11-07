@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: fct_daily_payments
+    description: Daily payment summary per UTC day and currency.
+    columns:
+      - name: summary_id
+        description: Primary key, "<summary_date>|<currency>".
+        data_tests: [unique, not_null]
+      - name: summary_date
+        data_tests: [not_null]
+      - name: currency
+        data_tests: [not_null]

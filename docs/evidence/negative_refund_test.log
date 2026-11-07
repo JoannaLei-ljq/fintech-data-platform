@@ -1,0 +1,7 @@
+### Negative test 2026-11-03T21:18:35Z: a $60 succeeded refund against the $50 payment 3002 must fail assert_refund_amounts_valid
+INSERT 0 1
+21:18:39  1 of 1 FAIL 1 assert_refund_amounts_valid ...................................... [FAIL 1 in 0.04s]
+21:18:39  Done. PASS=0 WARN=0 ERROR=1 SKIP=0 NO-OP=0 REUSED=0 TOTAL=1
+DELETE 1
+21:18:42  Done. PASS=1 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=1
+### Probe row removed; demo data back to the acceptance end state
