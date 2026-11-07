@@ -19,6 +19,8 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg import sql
 
+from tools.db_guard import SYNC_PREFIXES, assert_connected_to, assert_writable
+
 log = logging.getLogger("incremental_sync")
 
 # Epoch-like floor for a table that has never been synced.
@@ -175,8 +177,12 @@ def main() -> None:
     oltp_db = os.getenv("OLTP_DB", "fintech_oltp")
     analytics_db = os.getenv("ANALYTICS_DB", "fintech_analytics")
     log.info("source=%s target=%s fail_before_commit=%s", oltp_db, analytics_db, args.fail_before_commit)
+    # Only the target is written to; the original analytics database needs an explicit opt-in.
+    assert_writable(analytics_db, allowed_prefixes=SYNC_PREFIXES, purpose="incremental sync target",
+                    allow_protected_override=True)
     with psycopg.connect(conninfo(oltp_db), autocommit=True) as source, \
          psycopg.connect(conninfo(analytics_db), autocommit=True) as target:
+        assert_connected_to(target, analytics_db)
         for spec in TABLES:
             sync_table(source, target, spec, args.batch_size,
                        fail_before_commit=(spec.name == args.fail_before_commit))

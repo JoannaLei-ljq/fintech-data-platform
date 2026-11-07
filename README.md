@@ -92,6 +92,13 @@ docker compose stop                     # stop everything, keep data
 docker compose up -d --wait postgres    # Postgres only, without Airflow
 ```
 
+## Safety guards
+
+- `fintech_oltp` and `fintech_analytics` are protected (`tools/db_guard.py`).
+- The sync refuses to write to `fintech_analytics` unless `FINTECH_ALLOW_PROTECTED_DB_WRITES=1` is set for that one command.
+- V2 migrations accept only `v2_*` databases.
+- `scripts/fingerprint_protected_dbs.sh` prints a read-only fingerprint of the protected databases, to compare before and after any work.
+
 ## How the sync works
 
 - For each table, rows are read from the source in `(updated_at, pk)` order, strictly after the stored cursor `(last_updated_at, last_pk)`.
