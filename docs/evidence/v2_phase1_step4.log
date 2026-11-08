@@ -1,0 +1,202 @@
+### V2 Phase 1, Step 4 verification 2026-11-08T05:24:47Z on branch v2-phase1
+
+### 1. pytest (tests/v2): 66 Step 0-3 tests + 65 Step 4 tests
+test_db_guard.py::test_migrations_never_touch_protected_databases[fintech_oltp] PASSED [  0%]
+test_db_guard.py::test_migrations_never_touch_protected_databases[fintech_analytics] PASSED [  1%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[demo_oltp] PASSED [  2%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[postgres] PASSED [  3%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[airflow] PASSED [  3%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[v2] PASSED [  4%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[V2_oltp] PASSED [  5%]
+test_db_guard.py::test_migrations_only_accept_v2_prefix[xv2_oltp] PASSED [  6%]
+test_db_guard.py::test_migrations_accept_v2_databases[v2_oltp] PASSED [  6%]
+test_db_guard.py::test_migrations_accept_v2_databases[v2_analytics] PASSED [  7%]
+test_db_guard.py::test_migrations_accept_v2_databases[v2_test_x] PASSED [  8%]
+test_db_guard.py::test_sync_rejects_protected_target_without_override PASSED [  9%]
+test_db_guard.py::test_sync_override_requires_exact_value PASSED [  9%]
+test_db_guard.py::test_sync_accepts_demo_and_v2_targets[demo_analytics] PASSED [ 10%]
+test_db_guard.py::test_sync_accepts_demo_and_v2_targets[v2_analytics] PASSED [ 11%]
+test_db_guard.py::test_sync_cli_refuses_protected_target_before_connecting PASSED [ 12%]
+test_lifecycle.py::test_status_mapping_and_lifecycle_fields PASSED [ 12%]
+test_lifecycle.py::test_migrations_preserve_updated_at_and_amounts PASSED [ 13%]
+test_lifecycle.py::test_legacy_view_reproduces_mvp_statuses PASSED [ 14%]
+test_lifecycle.py::test_backfilled_event_history PASSED         [ 15%]
+test_lifecycle.py::test_event_state_reconciles_with_transactions PASSED [ 16%]
+test_lifecycle.py::test_backfill_event_ids_are_stable_uuid_v5 PASSED [ 16%]
+test_lifecycle.py::test_payment_events_are_append_only[UPDATE payment_events SET occurred_at = now() WHERE transaction_id = 3001] PASSED [ 17%]
+test_lifecycle.py::test_payment_events_are_append_only[DELETE FROM payment_events WHERE transaction_id = 3001] PASSED [ 18%]
+test_lifecycle.py::test_payment_events_are_append_only[TRUNCATE payment_events] PASSED [ 19%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[amount_minor = 1] PASSED [ 19%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[currency = 'EUR'] PASSED [ 20%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[user_id = 2] PASSED [ 21%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[merchant_id = 101] PASSED [ 22%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[created_at = now()] PASSED [ 22%]
+test_lifecycle.py::test_transaction_identity_and_original_amount_are_immutable[transaction_id = 9999] PASSED [ 23%]
+test_lifecycle.py::test_lifecycle_checks_reject_inconsistent_state PASSED [ 24%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides0-UniqueViolation] PASSED [ 25%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides1-UniqueViolation] PASSED [ 25%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides2-CheckViolation] PASSED [ 26%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides3-CheckViolation] PASSED [ 27%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides4-CheckViolation] PASSED [ 28%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides5-CheckViolation] PASSED [ 29%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides6-CheckViolation] PASSED [ 29%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides7-CheckViolation] PASSED [ 30%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides8-ForeignKeyViolation] PASSED [ 31%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides9-ForeignKeyViolation] PASSED [ 32%]
+test_lifecycle.py::test_payment_event_structural_constraints[overrides10-CheckViolation] PASSED [ 32%]
+test_lifecycle.py::test_valid_event_insert_and_duplicate_event_id PASSED [ 33%]
+test_lifecycle.py::test_relationships_are_preserved PASSED      [ 34%]
+test_migrations.py::test_applies_all_and_records_checksums PASSED [ 35%]
+test_migrations.py::test_rerun_is_a_noop PASSED                 [ 35%]
+test_migrations.py::test_target_version_stops_early PASSED      [ 36%]
+test_migrations.py::test_detects_edited_migration PASSED        [ 37%]
+test_migrations.py::test_failed_migration_leaves_no_trace PASSED [ 38%]
+test_migrations.py::test_applied_file_missing_is_an_error PASSED [ 38%]
+test_migrations.py::test_rejects_bad_migration_sets[names0] PASSED [ 39%]
+test_migrations.py::test_rejects_bad_migration_sets[names1] PASSED [ 40%]
+test_migrations.py::test_rejects_bad_migration_sets[names2] PASSED [ 41%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[fintech_oltp] PASSED [ 41%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[fintech_analytics] PASSED [ 42%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[demo_oltp] PASSED [ 43%]
+test_migrations.py::test_refuses_non_v2_databases_before_connecting[postgres] PASSED [ 44%]
+test_migrations.py::test_v001_baseline_matches_mvp_schema[oltp-ddl0-migrations0] PASSED [ 45%]
+test_migrations.py::test_v001_baseline_matches_mvp_schema[analytics-ddl1-migrations1] PASSED [ 45%]
+test_money.py::test_currency_reference_data PASSED              [ 46%]
+test_money.py::test_multi_currency_amounts_convert_exactly PASSED [ 47%]
+test_money.py::test_unconvertible_data_aborts_whole_migration[bad_row0-not exactly representable] PASSED [ 48%]
+test_money.py::test_unconvertible_data_aborts_whole_migration[bad_row1-unknown currency code] PASSED [ 48%]
+test_money.py::test_new_rows_are_validated PASSED               [ 49%]
+test_money.py::test_mvp_demo_seed_converts PASSED               [ 50%]
+test_write_path.py::test_valid_lifecycle_paths PASSED           [ 51%]
+test_write_path.py::test_backfilled_payment_continues_from_its_history PASSED [ 51%]
+test_write_path.py::test_identical_replay_is_a_no_op PASSED     [ 52%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change0] PASSED [ 53%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change1] PASSED [ 54%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change2] PASSED [ 54%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change3] PASSED [ 55%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change4] PASSED [ 56%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change5] PASSED [ 57%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change6] PASSED [ 58%]
+test_write_path.py::test_conflicting_payload_for_an_existing_event_id_is_rejected[change7] PASSED [ 58%]
+test_write_path.py::test_conflicting_created_replay_is_rejected PASSED [ 59%]
+test_write_path.py::test_sequence_gap_is_rejected_and_retryable PASSED [ 60%]
+test_write_path.py::test_taken_sequence_and_unknown_payment_are_rejected PASSED [ 61%]
+test_write_path.py::test_illegal_transitions_are_rejected[3004-2-captured] PASSED [ 61%]
+test_write_path.py::test_illegal_transitions_are_rejected[3001-4-authorized] PASSED [ 62%]
+test_write_path.py::test_illegal_transitions_are_rejected[3001-4-captured] PASSED [ 63%]
+test_write_path.py::test_illegal_transitions_are_rejected[3001-4-failed] PASSED [ 64%]
+test_write_path.py::test_illegal_transitions_are_rejected[3003-3-authorized] PASSED [ 64%]
+test_write_path.py::test_illegal_transitions_are_rejected[3003-3-failed] PASSED [ 65%]
+test_write_path.py::test_illegal_transitions_are_rejected[6001-3-authorized] PASSED [ 66%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.authorized-2_0] PASSED [ 67%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.authorized-2_1] PASSED [ 67%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.authorized-2_2] PASSED [ 68%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.authorized-2_3] PASSED [ 69%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.failed-2_0] PASSED [ 70%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.failed-2_1] PASSED [ 70%]
+test_write_path.py::test_invalid_payloads_are_rejected[3004-payment.refunded-2] PASSED [ 71%]
+test_write_path.py::test_invalid_payloads_are_rejected[6001-payment.created-1_0] PASSED [ 72%]
+test_write_path.py::test_invalid_payloads_are_rejected[6001-payment.created-1_1] PASSED [ 73%]
+test_write_path.py::test_invalid_payloads_are_rejected[6001-payment.created-1_2] PASSED [ 74%]
+test_write_path.py::test_invalid_payloads_are_rejected[6001-payment.created-2] PASSED [ 74%]
+test_write_path.py::test_rejected_create_rolls_back_the_inserted_payment_row PASSED [ 75%]
+test_write_path.py::test_caller_transaction_is_all_or_nothing PASSED [ 76%]
+test_write_path.py::test_concurrent_identical_submissions_record_once PASSED [ 77%]
+test_write_path.py::test_concurrent_competing_events_for_one_sequence PASSED [ 77%]
+test_write_path.py::test_concurrent_creation_of_the_same_payment PASSED [ 78%]
+test_write_path.py::test_concurrent_reuse_of_an_event_id_across_payments PASSED [ 79%]
+test_write_path.py::test_second_writer_waits_for_the_row_lock[True-duplicate] PASSED [ 80%]
+test_write_path.py::test_second_writer_waits_for_the_row_lock[False-recorded] PASSED [ 80%]
+test_write_path.py::test_concurrent_out_of_order_producers_converge PASSED [ 81%]
+test_write_path.py::test_application_role_cannot_write_directly[UPDATE transactions SET status = 'authorized', last_event_sequence = 2, authorized_at = now() WHERE transaction_id = 3004] PASSED [ 82%]
+test_write_path.py::test_application_role_cannot_write_directly[UPDATE transactions SET updated_at = now() WHERE transaction_id = 3004] PASSED [ 83%]
+test_write_path.py::test_application_role_cannot_write_directly[INSERT INTO transactions (transaction_id, user_id, merchant_id, amount_minor, currency, status, last_event_sequence) VALUES (6001, 1, 101, 100, 'USD', 'created', 1)] PASSED [ 83%]
+test_write_path.py::test_application_role_cannot_write_directly[DELETE FROM transactions WHERE transaction_id = 3004] PASSED [ 84%]
+test_write_path.py::test_application_role_cannot_write_directly[TRUNCATE transactions CASCADE] PASSED [ 85%]
+test_write_path.py::test_application_role_cannot_write_directly[INSERT INTO payment_events (event_id, transaction_id, event_sequence, event_type, amount_minor, currency, source, occurred_at) VALUES (gen_random_uuid(), 3004, 2, 'payment.authorized', 2000, 'USD', 'api', now())] PASSED [ 86%]
+test_write_path.py::test_application_role_cannot_write_directly[UPDATE payment_events SET occurred_at = now()] PASSED [ 87%]
+test_write_path.py::test_application_role_cannot_write_directly[DELETE FROM payment_events] PASSED [ 87%]
+test_write_path.py::test_application_role_cannot_write_directly[TRUNCATE payment_events] PASSED [ 88%]
+test_write_path.py::test_application_role_cannot_write_directly[INSERT INTO refunds (refund_id, transaction_id, amount_minor, reason, status) VALUES (1, 3001, 1, 'x', 'pending')] PASSED [ 89%]
+test_write_path.py::test_application_role_cannot_write_directly[UPDATE refunds SET status = 'succeeded'] PASSED [ 90%]
+test_write_path.py::test_application_role_cannot_write_directly[UPDATE currencies SET minor_units = 3] PASSED [ 90%]
+test_write_path.py::test_application_role_cannot_write_directly[ALTER TABLE transactions DISABLE TRIGGER transactions_history_consistent] PASSED [ 91%]
+test_write_path.py::test_application_role_cannot_write_directly[ALTER TABLE payment_events DISABLE TRIGGER payment_events_append_only] PASSED [ 92%]
+test_write_path.py::test_application_role_cannot_write_directly[SET session_replication_role = replica] PASSED [ 93%]
+test_write_path.py::test_application_role_cannot_write_directly[CREATE TABLE public.shadow (x int)] PASSED [ 93%]
+test_write_path.py::test_application_role_cannot_write_directly[CREATE FUNCTION public.currencies() RETURNS int LANGUAGE sql RETURN 1] PASSED [ 94%]
+test_write_path.py::test_privilege_catalog PASSED               [ 95%]
+test_write_path.py::test_owner_direct_writes_are_checked_at_commit[statements0-does not match its last event] PASSED [ 96%]
+test_write_path.py::test_owner_direct_writes_are_checked_at_commit[statements1-gaps] PASSED [ 96%]
+test_write_path.py::test_owner_direct_writes_are_checked_at_commit[statements2-has no events] PASSED [ 97%]
+test_write_path.py::test_owner_direct_writes_are_checked_at_commit[statements3-not a legal lifecycle] PASSED [ 98%]
+test_write_path.py::test_history_and_identity_protections_still_hold PASSED [ 99%]
+test_write_path.py::test_login_role_can_only_use_the_write_path PASSED [100%]
+============================= 131 passed in 29.40s =============================
+
+### 2. v2_oltp / v2_analytics migration status (after scripts/v2/reset_v2.sh)
+  oltp      applied  V001__baseline.sql
+  oltp      applied  V002__currencies_and_minor_units.sql
+  oltp      applied  V003__transaction_lifecycle.sql
+  oltp      applied  V004__payment_events.sql
+  oltp      applied  V005__payment_event_write_path.sql
+  analytics applied  V001__baseline.sql
+
+### 3. Write path demo in v2_oltp as v2_payment_app (one transaction, rolled back)
+  captured before authorized (gap)       -> SequenceGap: payment 3004: event_sequence 3 leaves a gap (expected 2)
+  authorized                             -> recorded: status=authorized seq=2
+  authorized replay                      -> duplicate: status=authorized seq=2
+  authorized, same id, other amount      -> EventIdConflict: event_id 00000000-0000-4000-8000-000000000002 was already recorded with a different payload
+  failed at taken sequence 2             -> SequenceConflict: payment 3004: event_sequence 2 is already recorded (last is 2)
+  captured retry                         -> recorded: status=captured seq=3
+  authorized after captured              -> IllegalTransition: payment 3004: illegal transition captured -> authorized
+    1 payment.created migration_backfill 2026-10-15T15:00:00+00:00
+    2 payment.authorized processor 2026-10-15T15:05:00+00:00
+    3 payment.captured processor 2026-10-15T15:05:30+00:00
+  legacy_transactions 3004: succeeded
+  direct write as app role -> InsufficientPrivilege: permission denied for table transactions
+  after rollback: payment_events = 9 , 3004 status = created
+
+### 4. Cluster roles created by V005 (NOLOGIN group roles, privileges granted only in v2_* databases)
+  v2_payment_app login=false superuser=false
+  v2_payment_writer login=false superuser=false
+  table grants to the V005 roles in fintech_oltp: 0
+  table grants to the V005 roles in fintech_analytics: 0
+  table grants to the V005 roles in demo_oltp: 0
+  table grants to the V005 roles in v2_analytics: 0
+  table grants to the V005 roles in v2_oltp: 12
+
+### 5. MVP regression (scripts/run_acceptance.sh against demo_* only)
+### Acceptance run 2026-11-08T05:22:47Z
+### Versions: Airflow 3.3.2, dbt-core 1.12.5, PostgreSQL 16.15
+### Summary: 27 passed, 0 failed
+PASS  run 1 state  (Run state: success)
+PASS  run 1 success_amount  (150.00)
+PASS  run 1 success_rate_pct  (66.67)
+PASS  run 1 refund_amount  (30.00)
+PASS  run 1 transactions rows/distinct  (4/4)
+PASS  run 1 refunds rows/distinct  (2/2)
+PASS  run 1 summary on one UTC day  (1 2026-10-15)
+PASS  run 1 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 1 refunds not double counted (dbt test)  (1)
+PASS  run 1 refund amount checks (dbt test)  (1)
+PASS  run 2 state  (Run state: success)
+PASS  run 2 metrics, counts and checkpoint unchanged  (150.00 66.67 30.00 4 2 2026-10-15T15:00:00.000000/3004)
+PASS  run 3 state (expected to fail)  (Run state: failed)
+PASS  run 3 dbt_build did not run  (task dbt_build: upstream_failed)
+PASS  run 3 raw 3004 still pending (data rolled back)  (pending)
+PASS  run 3 transactions checkpoint unchanged (checkpoint rolled back)  (2026-10-15T15:00:00.000000/3004)
+PASS  run 3 summary still the pre-change value  (150.00 66.67)
+PASS  run 4 state  (Run state: success)
+PASS  run 4 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 4 transactions rows/distinct  (4/4)
+PASS  run 4 raw 3004 now succeeded  (succeeded)
+PASS  run 4 checkpoint advanced  (advanced)
+PASS  run 4 metrics still on original UTC day  (1 2026-10-15)
+PASS  run 4 success_amount  (170.00)
+PASS  run 4 success_rate_pct  (75.00)
+PASS  run 4 refund_amount  (30.00)
+PASS  main database untouched  (4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004)
+
+### 6. Protected databases: fingerprint before Step 0 vs after Step 4
+IDENTICAL (9 lines: row count + md5 for 9 tables in fintech_oltp / fintech_analytics)

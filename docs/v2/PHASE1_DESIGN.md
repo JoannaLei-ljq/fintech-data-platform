@@ -1,6 +1,6 @@
 # V2 Phase 1: approved design and implementation notes
 
-Status: Steps 0–3 approved and implemented on branch `v2-phase1`. Steps 4–8 still need approval.
+Status: Steps 0–4 approved and implemented on branch `v2-phase1`. Steps 5–8 still need approval.
 The MVP is frozen at tag `v0.1.0-mvp`.
 
 ## Isolation and safety
@@ -21,9 +21,10 @@ The MVP is frozen at tag `v0.1.0-mvp`.
 
 Ordering is handled in two distinct places, and they will be tested separately.
 
-1. **OLTP sequence enforcement (write time, Step 4).** The producer supplies `event_id` and `event_sequence`.
-   - The write function will accept an event only if its sequence is exactly `last_event_sequence + 1` for that payment.
-   - It will reject gaps as retryable errors, and treat a replay of the same `event_id` as a no-op.
+1. **OLTP sequence enforcement (write time, Step 4, implemented).** The producer supplies `event_id` and `event_sequence`.
+   - `record_payment_event()` accepts an event only if its sequence is exactly `last_event_sequence + 1` for that payment.
+   - It rejects gaps as retryable errors (`PE003`), and treats a replay of the same `event_id` with the same payload as a no-op.
+   - It does not buffer early events: the producer retries them. Buffering and reordering belong downstream only.
    - So `payment_events` in OLTP never contains gaps, and commit order equals sequence order for each payment.
    - Step 3 provides only the structural guarantees: unique `(transaction_id, event_sequence)`, sequence 1 is always `payment.created`, and append-only rows.
 2. **Downstream out-of-order processing (analytics, Steps 6–7).**
@@ -96,7 +97,72 @@ The MVP never recorded *when* authorization, capture or failure happened, only w
 3. **Backfilled timestamps are approximate.** Lifecycle timestamps use `updated_at` as an upper bound, and backfilled `received_at` is the migration time (the true ingestion time).
 4. **The MVP sync now refuses `fintech_analytics` as a target** unless `FINTECH_ALLOW_PROTECTED_DB_WRITES=1` is set (Step 0 guard).
 
-### Known gaps until Step 4
-- **Transitions aren't enforced on direct updates yet.** A direct `UPDATE transactions` can still move a payment to any state allowed by the CHECK constraints without writing a matching event. Likewise, direct `INSERT`s into `payment_events` can leave sequence gaps. Contiguity, legal transitions, idempotent replays and keeping state and history in sync all belong to the Step 4 write path.
+### Step 4: payment event write path (`V005__payment_event_write_path`)
+
+**`record_payment_event()`** (PL/pgSQL, `SECURITY DEFINER`, fixed `search_path`) runs in the caller's transaction:
+
+1. Validates the payload. Each event type has its required and forbidden fields, and `source` must be `api` or `processor`, because `migration_backfill` is reserved.
+2. Locks the payment row with `SELECT … FOR UPDATE`.
+   - A `payment.created` event first inserts the row with `ON CONFLICT DO NOTHING`.
+   - A concurrent creator of the same payment therefore waits, then sees the committed row.
+3. Looks up `event_id` *after* taking the lock:
+   - identical payload → `duplicate`, no writes;
+   - any difference → `PE006`.
+4. Checks the sequence:
+   - an already-used number → `PE004`;
+   - a gap → `PE003`, retryable.
+5. Checks the transition. Only these are legal: created → authorized, created → failed, authorized → captured, authorized → failed. Anything else → `PE005`.
+6. Checks the amount: authorized and captured events must carry the original amount and currency, because partial amounts aren't supported. `occurred_at` must not be earlier than the previous lifecycle step.
+7. Inserts the event and updates `transactions` together. Any error rolls back everything, including a payment row inserted in step 2.
+
+| SQLSTATE | Meaning | Python (`payments/events.py`) |
+|---|---|---|
+| PE001 | invalid payload | `InvalidEvent` |
+| PE002 | unknown payment | `UnknownPayment` |
+| PE003 | sequence gap (retryable) | `SequenceGap` |
+| PE004 | sequence already used | `SequenceConflict` |
+| PE005 | illegal transition | `IllegalTransition` |
+| PE006 | `event_id` reused with a different payload | `EventIdConflict` |
+
+**Bypass prevention (privileges first, triggers second).**
+
+*Roles* (both are cluster-wide NOLOGIN group roles, created only if missing, and refused if they carry elevated attributes):
+- **`v2_payment_app`:**
+  - has `SELECT` on the payment, reference and legacy tables, plus `EXECUTE` on the function;
+  - has no `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE` anywhere;
+  - is not a member of the writer role.
+- **`v2_payment_writer`:**
+  - owns the function;
+  - holds only the column privileges it uses (it can `UPDATE` lifecycle columns only, never identity or amount);
+  - has no `DELETE` or `TRUNCATE`.
+
+*Other privileges:*
+- `PUBLIC` has no `EXECUTE` on the function and no `CREATE` on schema `public`.
+- Deployed services should log in as a role that is a member of `v2_payment_app`.
+
+*Commit-time triggers:*
+- Deferred constraint triggers on both tables re-check every touched payment at commit:
+  - its history is contiguous;
+  - its history is one of the five legal paths;
+  - its last event matches the current state;
+  - the created amount matches.
+- This also catches direct writes by the table owner.
+- The Step 3 append-only and immutability triggers remain.
+
+**Concurrency.**
+- One row lock per call, so different payments never block each other, and the function has no lock-ordering deadlocks.
+- Designed for READ COMMITTED, where each statement sees rows committed before it.
+- Under REPEATABLE READ or SERIALIZABLE, a concurrent change to the same payment surfaces as a serialization failure, and the caller should retry.
+
+**Tests.** The Step 3 tests are now pinned to V004, because they insert events directly to test the structural constraints, which V005 rejects at commit. `test_write_path.py` covers the following at the head version:
+- legal paths, replays, conflicts, gaps, illegal transitions and invalid payloads;
+- rollback of partial writes and caller-transaction atomicity;
+- concurrency: identical, competing, create-race, cross-payment `event_id` race, lock wait, and shuffled producers;
+- privileges, both via `SET ROLE` and via a real temporary login role;
+- commit-time checks on owner writes.
+
+### Remaining gaps after Step 4
+- **A superuser can still bypass the protections.** It can disable triggers, set `session_replication_role = replica`, or write as owner while keeping state and history consistent. Privileges and the commit-time checks bound this, but don't remove it.
+- **The table owner (the migration user) can still write directly,** as long as the result is a legal, consistent history. This is intended for repairs. Using it requires the owner's credentials, which application code must not have.
 - **Refunds still use the MVP vocabulary** (pending, succeeded, failed) and have no currency or idempotency key. That arrives in Step 5.
 - **`v2_analytics` is still at the V001 baseline.** Its schema changes come with the sync engine in Step 6.

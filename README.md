@@ -98,6 +98,7 @@ docker compose up -d --wait postgres    # Postgres only, without Airflow
 - The sync refuses to write to `fintech_analytics` unless `FINTECH_ALLOW_PROTECTED_DB_WRITES=1` is set for that one command.
 - V2 migrations accept only `v2_*` databases.
 - `scripts/fingerprint_protected_dbs.sh` prints a read-only fingerprint of the protected databases, to compare before and after any work.
+- V2 payment state changes only through `record_payment_event()` (migration `V005`). The application role `v2_payment_app` can read but cannot write payment tables directly. See `docs/v2/PHASE1_DESIGN.md`.
 
 ## How the sync works
 

@@ -29,7 +29,9 @@ def build(make_db, label: str, upto: int | None = None) -> str:
 
 @pytest.fixture
 def seeded(make_db) -> str:
-    return build(make_db, "life")
+    # Pinned to V004: these tests describe the Step 3 schema. From V005 on, direct writes that
+    # leave state and history out of step are rejected at commit (see test_write_path.py).
+    return build(make_db, "life", upto=4)
 
 
 # --- mapping and backfill ---------------------------------------------------------
