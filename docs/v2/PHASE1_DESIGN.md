@@ -1,6 +1,6 @@
 # V2 Phase 1: approved design and implementation notes
 
-Status: Steps 0–4 approved and implemented on branch `v2-phase1`. Steps 5–8 still need approval.
+Status: Steps 0–5 approved and implemented on branch `v2-phase1`. Steps 6–8 still need approval.
 The MVP is frozen at tag `v0.1.0-mvp`.
 
 ## Isolation and safety
@@ -43,7 +43,7 @@ Ordering is handled in two distinct places, and they will be tested separately.
 
 - Succeeded refund amounts will be attributed to the refund's **`succeeded_at`** date, not the date it was requested.
 - Requested amounts belong to `requested_at`.
-- These columns arrive with the refund schema in Step 5. Until then, refunds keep their MVP status vocabulary.
+- These columns exist since Step 5 (`V006`); the analytics models that use them come later.
 
 ## Payment status mapping for existing data
 
@@ -164,5 +164,57 @@ The MVP never recorded *when* authorization, capture or failure happened, only w
 ### Remaining gaps after Step 4
 - **A superuser can still bypass the protections.** It can disable triggers, set `session_replication_role = replica`, or write as owner while keeping state and history consistent. Privileges and the commit-time checks bound this, but don't remove it.
 - **The table owner (the migration user) can still write directly,** as long as the result is a legal, consistent history. This is intended for repairs. Using it requires the owner's credentials, which application code must not have.
-- **Refunds still use the MVP vocabulary** (pending, succeeded, failed) and have no currency or idempotency key. That arrives in Step 5.
 - **`v2_analytics` is still at the V001 baseline.** Its schema changes come with the sync engine in Step 6.
+
+### Step 5: refund processing (`V006__refund_processing`)
+
+**Model.**
+- **Statuses:** `requested → succeeded` or `requested → failed`. Both outcomes are terminal.
+- **New columns on `refunds`:**
+  - `currency`, which must equal the payment's currency;
+  - `idempotency_key`, unique, 1–200 printable characters;
+  - `requested_at`, `succeeded_at`, `failed_at` and `failure_code`.
+- **CHECK constraints** tie the timestamps and `failure_code` to the status.
+- **New refund IDs** come from a sequence that continues after the existing IDs.
+- **The payment is never changed by a refund.** A fully refunded payment stays `captured`; refunded totals are derived from `refunds`.
+
+**Existing rows.**
+- Statuses map as pending → requested, succeeded → succeeded, failed → failed (with `failure_code = 'legacy_unknown'`).
+- `requested_at = created_at`.
+- `succeeded_at` and `failed_at` use `updated_at`. That makes them synthetic upper bounds, as in the Step 3 backfill.
+- Idempotency keys are `legacy-refund:<id>`.
+- `legacy_refunds` maps back to the MVP vocabulary and still matches the MVP data exactly.
+
+**Write functions** (`SECURITY DEFINER`, owned by `v2_payment_writer`, `EXECUTE` granted only to `v2_payment_app`):
+- **`request_refund(key, payment, amount, currency, reason)`:**
+  1. Locks the payment row (`FOR UPDATE`).
+  2. Looks up the idempotency key after taking the lock:
+     - same request → `duplicate` with the existing refund and its current status;
+     - otherwise → `RF006`.
+  3. Requires a `captured` payment (`RF003`) and the payment's currency (`RF004`).
+  4. Requires *requested + succeeded + this amount ≤ the payment amount*, so pending requests reserve capacity (`RF005`).
+- **`complete_refund(refund, succeeded|failed, failure_code, completed_at)`:**
+  - Locks the payment, then the refund. That is the same lock order as requests, so the two can't deadlock.
+  - Allows only `requested → succeeded` or `requested → failed`.
+  - Replaying the same outcome returns `duplicate`. A different outcome after a terminal status → `RF007`.
+  - A failed refund releases its reservation.
+- **Error codes:** `RF001` invalid input, `RF002` unknown payment or refund. Python: `payments/refunds.py`.
+
+**Protections below the functions.**
+- The application role has no write privileges on `refunds` and no access to the sequence.
+- **Triggers:**
+  - refund identity, amount, currency, key, reason and request time are immutable;
+  - terminal statuses can't change;
+  - `DELETE` and `TRUNCATE` are refused.
+- **A deferred commit-time check, per payment:**
+  - refunds exist only on `captured` payments;
+  - their currencies match the payment's;
+  - requested + succeeded ≤ the payment amount.
+
+  It also catches direct writes by the table owner.
+- The currency rule is a commit-time check rather than a composite foreign key. A composite key would need `UNIQUE (transaction_id, currency)` on `transactions`, and that extra index broke `record_payment_event()`'s concurrent-create handling (caught by the Step 4 tests).
+
+**Concurrency.**
+- Every refund decision for a payment is serialized on that payment's row lock. Different payments never block each other.
+- Refund functions and payment events for the *same* payment wait for each other briefly.
+- Sequences are not transactional, so refund IDs can have gaps after rollbacks.
