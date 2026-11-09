@@ -408,9 +408,31 @@ raw.refunds ────────── stg_refunds ─┬─ int_refund_tota
 
   Tested in `test_dbt_v2.py`.
 
-**Synthetic backfill.**
-- Capture, authorization and failure times for migrated MVP payments are upper bounds (`updated_at`), not observations.
-- `fct_payments.captured_at_is_estimate` and `fct_daily_payments.estimated_capture_time_count` expose this.
+**Synthetic backfill and timestamp provenance (release fix 3).**
+
+No historical value is rewritten or invented; every timestamp below is labelled with where it came from.
+
+| Timestamp | Migrated MVP rows | Rows written through the V2 write functions | Where it's exposed |
+|---|---|---|---|
+| Payment `created_at` and its `payment.created` event time | Recorded by the MVP: real, but not processor-verified | From the event producer | `fct_payments.created_at_provenance` (`mvp_recorded` / `producer_reported`); `stg_payment_events.occurred_at_provenance` |
+| `authorized_at`, `captured_at`, `failed_at` and their event times | **Synthetic upper bound** (the MVP's `updated_at`; the MVP never recorded these steps) | From the event producer | `fct_payments.authorized_at_is_estimate` / `captured_at_is_estimate` / `failed_at_is_estimate`; `occurred_at_provenance = synthetic_upper_bound` |
+| Payment `failure_code = 'legacy_unknown'` | **Synthetic value** | Real | `fct_payments.failure_code_is_synthetic` |
+| Event `received_at` | The migration's run time, not a processor receipt | Time the OLTP database received it | `stg_payment_events.received_at_provenance` (`migration_run_time` / `oltp_ingestion`) |
+| Refund `requested_at` | Recorded by the MVP (`created_at`) | Database clock | `stg_refunds.requested_at_provenance` |
+| Refund `succeeded_at` / `failed_at` | **Synthetic upper bound** (the MVP's `updated_at`) | Recorded (caller-supplied or database clock) | `stg_refunds.completed_at_provenance`; `int_refund_completions.succeeded_at_is_estimate` |
+| Refund `failure_code = 'legacy_unknown'` | **Synthetic value** | Real | `stg_refunds.failure_code_is_synthetic` |
+
+- **Where the provenance comes from:**
+  - **Payments:** `payment_events.source = 'migration_backfill'`. This is explicit and immutable, and `record_payment_event()` refuses it for new events.
+  - **Refunds:** an explicit column, **`refunds.record_source`** (OLTP V009), carried through the sync and `raw.refunds` (analytics V005).
+    - V009 identified migrated refunds by the exact key V006 gave them, and refuses to guess if that prefix was reused.
+    - It changed only the new column, preserving `updated_at`. It re-stamped `sync_xid` so the next sync carries the value into raw.
+    - The value is immutable. `migration_backfill` is reserved for migrated history, and `request_refund()` (unchanged) always gets `api`.
+- **In the marts:** `fct_daily_payments` and `fct_merchant_performance` add `estimated_capture_time_count`, `estimated_failure_time_count`, `estimated_refund_time_count` and `has_estimated_dates`. Those rows are still counted, but they are marked as not verified, and the report puts `*` on such dates.
+- **On the demo seed:** 2026-10-15 has 2 estimated captures, 1 estimated failure and 2 estimated refunds.
+- **Reconciliation:** the independent calculator recomputes every flag and count from raw event sources and `record_source`.
+- **Use:** these timestamps date the MVP rows, and they must never be used to measure processing latency.
+- **Upgrade order** for an existing deployment: OLTP V009, then analytics V005, then the code. The next incremental sync fills `raw.refunds.record_source`.
 - Use these timestamps only to date the MVP rows, never to measure processing latency.
 
 **Data quality.** 81 data tests and 6 unit tests run in every `dbt build`:

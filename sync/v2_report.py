@@ -69,15 +69,18 @@ def kpi_summary(conn) -> None:
     rows = conn.execute("""
         SELECT report_date_utc, currency, minor_units, created_payment_count, cohort_captured_amount_minor,
                cohort_success_rate_pct, captured_count, captured_amount_minor, failed_count, outcome_success_rate_pct,
-               succeeded_refund_count, succeeded_refund_amount_minor, net_captured_amount_minor
+               succeeded_refund_count, succeeded_refund_amount_minor, net_captured_amount_minor, has_estimated_dates
         FROM marts.fct_daily_payments ORDER BY report_date_utc, currency""").fetchall()
     print("published daily KPIs (marts.fct_daily_payments; cohort = created date, outcome = capture/failure date, "
           "refunds = succeeded_at date):")
     print(f"  {'date':10s} {'cur':3s} {'created':>7s} {'cohort_cap':>11s} {'cohort%':>7s} {'captured':>11s} "
           f"{'outcome%':>8s} {'refunds':>10s} {'net':>11s}")
-    for (d, cur, mu, created, c_amt, c_rate, _cap, cap_amt, _failed, o_rate, _rc, ref_amt, net) in rows:
-        print(f"  {d} {cur:3s} {created:7d} {major(c_amt, mu):>11s} {str(c_rate or '-'):>7s} {major(cap_amt, mu):>11s} "
+    for (d, cur, mu, created, c_amt, c_rate, _cap, cap_amt, _failed, o_rate, _rc, ref_amt, net, estimated) in rows:
+        print(f"  {d}{'*' if estimated else ' '}{cur:3s} {created:7d} {major(c_amt, mu):>11s} {str(c_rate or '-'):>7s} {major(cap_amt, mu):>11s} "
               f"{str(o_rate or '-'):>8s} {major(ref_amt, mu):>10s} {major(net, mu):>11s}")
+    if any(r[-1] for r in rows):
+        print("  * some captures, failures or refunds on this date carry synthetic timestamps from the MVP migration "
+              "(upper bounds, not verified processor times)")
     totals = conn.execute("""
         SELECT p.currency, c.minor_units, count(*), count(*) FILTER (WHERE is_captured),
                coalesce(sum(amount_minor) FILTER (WHERE is_captured), 0), sum(succeeded_refund_amount_minor)

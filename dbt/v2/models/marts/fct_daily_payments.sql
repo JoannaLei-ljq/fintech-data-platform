@@ -9,6 +9,9 @@
 --   net_captured_amount_minor = captured_amount_minor - succeeded_refund_amount_minor
 --              (money in minus money out on that date; both on event dates)
 -- Rates are NULL when the denominator is zero; in-flight payments are excluded from rates.
+-- estimated_*_count say how many of the row's captures, failures and refunds are dated by a
+-- synthetic (migrated MVP) timestamp; has_estimated_dates is true if any are. Those rows are
+-- still counted, but their dates are not verified processor timestamps.
 
 with payments as (
     select * from {{ ref('fct_payments') }}
@@ -40,7 +43,8 @@ captures as (
 ),
 
 failures as (
-    select failed_date_utc as report_date_utc, currency, count(*) as failed_count
+    select failed_date_utc as report_date_utc, currency, count(*) as failed_count,
+           count(*) filter (where failed_at_is_estimate) as estimated_failure_time_count
     from payments
     where is_failed
     group by 1, 2
@@ -51,7 +55,8 @@ refunds as (
         succeeded_date_utc                                      as report_date_utc,
         currency,
         count(*)                                                as succeeded_refund_count,
-        sum(amount_minor)                                       as succeeded_refund_amount_minor
+        sum(amount_minor)                                       as succeeded_refund_amount_minor,
+        count(*) filter (where succeeded_at_is_estimate)        as estimated_refund_time_count
     from {{ ref('int_refund_completions') }}
     group by 1, 2
 ),
@@ -86,7 +91,11 @@ select
     coalesce(r.succeeded_refund_count, 0)                               as succeeded_refund_count,
     coalesce(r.succeeded_refund_amount_minor, 0)                        as succeeded_refund_amount_minor,
     coalesce(k.captured_amount_minor, 0) - coalesce(r.succeeded_refund_amount_minor, 0)
-                                                                        as net_captured_amount_minor
+                                                                        as net_captured_amount_minor,
+    coalesce(f.estimated_failure_time_count, 0)                         as estimated_failure_time_count,
+    coalesce(r.estimated_refund_time_count, 0)                          as estimated_refund_time_count,
+    coalesce(k.estimated_capture_time_count, 0) + coalesce(f.estimated_failure_time_count, 0)
+        + coalesce(r.estimated_refund_time_count, 0) > 0                as has_estimated_dates
 from grain as g
 left join cohort   as c on c.report_date_utc = g.report_date_utc and c.currency = g.currency
 left join captures as k on k.report_date_utc = g.report_date_utc and k.currency = g.currency

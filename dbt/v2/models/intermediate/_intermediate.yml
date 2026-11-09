@@ -77,7 +77,7 @@ unit_tests:
         - {transaction_id: 14, is_contiguous: false, is_valid_lifecycle: true,  has_conflicting_event_ids: false, has_duplicate_sequences: true}   # path created,authorized,failed is legal; the duplicate is what is wrong
 
   - name: ut_event_state_marks_synthetic_capture_times
-    description: A capture that comes from the migration backfill is flagged, so its timestamp is not treated as observed.
+    description: Every lifecycle step that comes from the migration backfill is flagged (created = MVP-recorded; authorized/captured/failed = synthetic), so its time is not treated as an observed processor timestamp.
     model: int_payment_state_from_events
     given:
       - input: ref('stg_payment_events')
@@ -88,10 +88,15 @@ unit_tests:
           - {event_id: "00000000-0000-0000-0000-000000000211", transaction_id: 21, event_sequence: 1, lifecycle_status: created,    event_source: migration_backfill}
           - {event_id: "00000000-0000-0000-0000-000000000212", transaction_id: 21, event_sequence: 2, lifecycle_status: authorized, event_source: processor}
           - {event_id: "00000000-0000-0000-0000-000000000213", transaction_id: 21, event_sequence: 3, lifecycle_status: captured,   event_source: processor}
+          - {event_id: "00000000-0000-0000-0000-000000000221", transaction_id: 22, event_sequence: 1, lifecycle_status: created, event_source: migration_backfill}
+          - {event_id: "00000000-0000-0000-0000-000000000222", transaction_id: 22, event_sequence: 2, lifecycle_status: failed,  event_source: migration_backfill, failure_code: legacy_unknown}
+          - {event_id: "00000000-0000-0000-0000-000000000231", transaction_id: 23, event_sequence: 1, lifecycle_status: created, event_source: api}
     expect:
       rows:
-        - {transaction_id: 20, derived_status: captured, has_backfilled_events: true, captured_by_backfill: true}
-        - {transaction_id: 21, derived_status: captured, has_backfilled_events: true, captured_by_backfill: false}
+        - {transaction_id: 20, derived_status: captured, has_backfilled_events: true,  created_by_backfill: true,  authorized_by_backfill: true,  captured_by_backfill: true,  failed_by_backfill: false}
+        - {transaction_id: 21, derived_status: captured, has_backfilled_events: true,  created_by_backfill: true,  authorized_by_backfill: false, captured_by_backfill: false, failed_by_backfill: false}
+        - {transaction_id: 22, derived_status: failed,   has_backfilled_events: true,  created_by_backfill: true,  authorized_by_backfill: false, captured_by_backfill: false, failed_by_backfill: true}
+        - {transaction_id: 23, derived_status: created,  has_backfilled_events: false, created_by_backfill: false, authorized_by_backfill: false, captured_by_backfill: false, failed_by_backfill: false}
 
   - name: ut_refund_totals_partial_pending_and_failed
     description: Multiple partial refunds, a failed request and an open request aggregate to one exact row per payment.

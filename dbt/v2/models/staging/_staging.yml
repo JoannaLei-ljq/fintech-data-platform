@@ -77,6 +77,9 @@ models:
         data_tests: [positive_value]
       - name: occurred_at
         data_tests: [not_null]
+      - name: occurred_at_provenance
+        data_tests:
+          - accepted_values: {arguments: {values: [producer_reported, mvp_recorded, synthetic_upper_bound]}}
       - name: received_at
         data_tests: [not_null]
 
@@ -101,3 +104,8 @@ models:
           - accepted_values: {arguments: {values: [requested, succeeded, failed]}}
       - name: requested_at
         data_tests: [not_null]
+      - name: record_source
+        description: Explicit provenance from OLTP (V009); never inferred from the idempotency key.
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: [api, migration_backfill]}}

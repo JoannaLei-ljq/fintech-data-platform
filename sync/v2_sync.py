@@ -72,7 +72,7 @@ TABLES: tuple[Table, ...] = (
     Table("refunds", "refund_id",
           ("refund_id", "transaction_id", "amount_minor", "currency", "reason", "status",
            "idempotency_key", "failure_code", "created_at", "updated_at", "requested_at",
-           "succeeded_at", "failed_at")),
+           "succeeded_at", "failed_at", "record_source")),
     Table("payment_events", "event_id",
           ("event_id", "transaction_id", "event_sequence", "event_type", "amount_minor", "currency",
            "failure_code", "source", "occurred_at", "received_at"), append_only=True),

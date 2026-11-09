@@ -2,8 +2,10 @@
 --
 -- amount_minor is the original payment amount and never changes; refunds are reported beside
 -- it, aggregated to one row per payment first (int_refund_totals), so nothing fans out.
--- captured_at is the capture event time. For payments migrated from the MVP it is a synthetic
--- upper bound (the MVP never recorded it): captured_at_is_estimate flags those rows.
+-- Timestamp provenance: for payments migrated from the MVP, authorized_at / captured_at /
+-- failed_at are synthetic upper bounds (the MVP's updated_at; it never recorded those steps) and
+-- failure_code 'legacy_unknown' is synthetic: *_is_estimate / failure_code_is_synthetic flag them.
+-- created_at of migrated payments is the MVP's recorded value (created_at_provenance).
 
 with payments as (
     select * from {{ ref('stg_transactions') }}
@@ -35,7 +37,12 @@ select
     p.captured_date_utc,
     p.failed_at,
     p.failed_date_utc,
+    case when e.created_by_backfill then 'mvp_recorded' else 'producer_reported' end
+                                                                as created_at_provenance,
+    coalesce(e.authorized_by_backfill, false)                   as authorized_at_is_estimate,
     coalesce(e.captured_by_backfill, false)                     as captured_at_is_estimate,
+    coalesce(e.failed_by_backfill, false)                       as failed_at_is_estimate,
+    coalesce(e.failed_by_backfill, false)                       as failure_code_is_synthetic,
     coalesce(e.has_backfilled_events, false)                    as has_backfilled_events,
     p.status = 'captured'                                       as is_captured,
     p.status = 'failed'                                         as is_failed,

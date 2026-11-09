@@ -9,7 +9,8 @@ select
     r.requested_at,
     r.succeeded_at,
     r.requested_date_utc,
-    r.succeeded_date_utc
+    r.succeeded_date_utc,
+    r.is_migrated                as succeeded_at_is_estimate   -- synthetic upper bound for migrated refunds
 from {{ ref('stg_refunds') }} as r
 join {{ ref('stg_transactions') }} as p
   on p.transaction_id = r.transaction_id

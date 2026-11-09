@@ -32,15 +32,20 @@ from decimal import ROUND_HALF_UP, Decimal
 DAILY_FIELDS = ("created_payment_count", "cohort_captured_count", "cohort_failed_count", "cohort_in_flight_count",
                 "cohort_captured_amount_minor", "cohort_success_rate_pct", "captured_count", "captured_amount_minor",
                 "failed_count", "outcome_success_rate_pct", "succeeded_refund_count", "succeeded_refund_amount_minor",
-                "net_captured_amount_minor")
+                "net_captured_amount_minor", "estimated_capture_time_count", "estimated_failure_time_count",
+                "estimated_refund_time_count", "has_estimated_dates")
 MERCHANT_FIELDS = ("created_payment_count", "captured_count", "captured_amount_minor", "failed_count",
                    "outcome_success_rate_pct", "succeeded_refund_count", "succeeded_refund_amount_minor",
-                   "net_captured_amount_minor", "refunded_of_captured_amount_minor", "refund_rate_pct")
+                   "net_captured_amount_minor", "refunded_of_captured_amount_minor", "refund_rate_pct",
+                   "estimated_capture_time_count", "estimated_failure_time_count", "estimated_refund_time_count",
+                   "has_estimated_dates")
 PAYMENT_FIELDS = ("merchant_id", "currency", "amount_minor", "status", "created_date_utc", "captured_date_utc",
                   "failed_date_utc", "refund_request_count", "pending_refund_count", "succeeded_refund_count",
                   "failed_refund_count", "requested_refund_amount_minor", "pending_refund_amount_minor",
                   "succeeded_refund_amount_minor", "failed_refund_amount_minor", "remaining_refundable_amount_minor",
-                  "net_captured_amount_minor", "is_fully_refunded")
+                  "net_captured_amount_minor", "is_fully_refunded", "created_at_provenance",
+                  "authorized_at_is_estimate", "captured_at_is_estimate", "failed_at_is_estimate",
+                  "failure_code_is_synthetic")
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,7 @@ class Event:
     transaction_id: int
     event_type: str
     occurred_at: datetime
+    source: str = "api"            # migration_backfill = synthetic history (except created: MVP-recorded)
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,7 @@ class Refund:
     amount_minor: int
     status: str
     succeeded_at: datetime | None = None
+    record_source: str = "api"     # migration_backfill = migrated MVP refund (synthetic completion time)
 
 
 @dataclass
@@ -93,8 +100,11 @@ def pct(numerator: int, denominator: int) -> Decimal | None:
 def compute(payments: list[Payment], events: list[Event], refunds: list[Refund]) -> Reference:
     ref = Reference()
     by_type: dict[tuple[int, str], datetime] = {}
+    backfilled: set[tuple[int, str]] = set()
     for e in events:
         by_type[(e.transaction_id, e.event_type)] = e.occurred_at
+        if e.source == "migration_backfill":
+            backfilled.add((e.transaction_id, e.event_type))
     refunds_of: dict[int, list[Refund]] = defaultdict(list)
     for r in refunds:
         refunds_of[r.transaction_id].append(r)
@@ -140,6 +150,12 @@ def compute(payments: list[Payment], events: list[Event], refunds: list[Refund])
             "remaining_refundable_amount_minor": p.amount_minor - pending - succeeded if is_captured else 0,
             "net_captured_amount_minor": p.amount_minor - succeeded if is_captured else 0,
             "is_fully_refunded": is_captured and succeeded == p.amount_minor,
+            "created_at_provenance": "mvp_recorded" if (p.transaction_id, "payment.created") in backfilled
+                                     else "producer_reported",
+            "authorized_at_is_estimate": (p.transaction_id, "payment.authorized") in backfilled,
+            "captured_at_is_estimate": (p.transaction_id, "payment.captured") in backfilled,
+            "failed_at_is_estimate": (p.transaction_id, "payment.failed") in backfilled,
+            "failure_code_is_synthetic": (p.transaction_id, "payment.failed") in backfilled,
         }
 
         cohort = daily[(created_day, p.currency)]
@@ -153,10 +169,12 @@ def compute(payments: list[Payment], events: list[Event], refunds: list[Refund])
             for bucket in (daily[(capture_day, p.currency)], merchant[(p.merchant_id, capture_day, p.currency)]):
                 bucket["captured_count"] += 1
                 bucket["captured_amount_minor"] += p.amount_minor
+                bucket["estimated_capture_time_count"] += (p.transaction_id, "payment.captured") in backfilled
             merchant[(p.merchant_id, capture_day, p.currency)]["refunded_of_captured_amount_minor"] += succeeded
         if is_failed:
-            daily[(failure_day, p.currency)]["failed_count"] += 1
-            merchant[(p.merchant_id, failure_day, p.currency)]["failed_count"] += 1
+            for bucket in (daily[(failure_day, p.currency)], merchant[(p.merchant_id, failure_day, p.currency)]):
+                bucket["failed_count"] += 1
+                bucket["estimated_failure_time_count"] += (p.transaction_id, "payment.failed") in backfilled
 
     for r in refunds:
         if r.status != "succeeded":
@@ -165,6 +183,7 @@ def compute(payments: list[Payment], events: list[Event], refunds: list[Refund])
         for bucket in (daily[(day, r.currency)], merchant[(merchant_of[r.transaction_id], day, r.currency)]):
             bucket["succeeded_refund_count"] += 1
             bucket["succeeded_refund_amount_minor"] += r.amount_minor
+            bucket["estimated_refund_time_count"] += r.record_source == "migration_backfill"
 
     for key, m in daily.items():
         row = {f: m.get(f, 0) for f in DAILY_FIELDS}
@@ -172,12 +191,16 @@ def compute(payments: list[Payment], events: list[Event], refunds: list[Refund])
                                              row["cohort_captured_count"] + row["cohort_failed_count"])
         row["outcome_success_rate_pct"] = pct(row["captured_count"], row["captured_count"] + row["failed_count"])
         row["net_captured_amount_minor"] = row["captured_amount_minor"] - row["succeeded_refund_amount_minor"]
+        row["has_estimated_dates"] = (row["estimated_capture_time_count"] + row["estimated_failure_time_count"]
+                                      + row["estimated_refund_time_count"]) > 0
         ref.daily[key] = row
     for key, m in merchant.items():
         row = {f: m.get(f, 0) for f in MERCHANT_FIELDS}
         row["outcome_success_rate_pct"] = pct(row["captured_count"], row["captured_count"] + row["failed_count"])
         row["net_captured_amount_minor"] = row["captured_amount_minor"] - row["succeeded_refund_amount_minor"]
         row["refund_rate_pct"] = pct(row["refunded_of_captured_amount_minor"], row["captured_amount_minor"])
+        row["has_estimated_dates"] = (row["estimated_capture_time_count"] + row["estimated_failure_time_count"]
+                                      + row["estimated_refund_time_count"]) > 0
         ref.merchant[key] = row
     return ref
 
@@ -187,9 +210,10 @@ def load_raw(conn) -> Reference:
     payments = [Payment(*r) for r in conn.execute(
         "SELECT transaction_id, merchant_id, currency, amount_minor, status, created_at, captured_at, failed_at "
         "FROM raw.transactions")]
-    events = [Event(*r) for r in conn.execute("SELECT transaction_id, event_type, occurred_at FROM raw.payment_events")]
+    events = [Event(*r) for r in conn.execute(
+        "SELECT transaction_id, event_type, occurred_at, source FROM raw.payment_events")]
     refunds = [Refund(*r) for r in conn.execute(
-        "SELECT refund_id, transaction_id, currency, amount_minor, status, succeeded_at FROM raw.refunds")]
+        "SELECT refund_id, transaction_id, currency, amount_minor, status, succeeded_at, record_source FROM raw.refunds")]
     return compute(payments, events, refunds)
 
 

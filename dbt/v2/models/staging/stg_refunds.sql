@@ -12,6 +12,17 @@ select
     requested_at,
     succeeded_at,
     failed_at,
+    -- Provenance (refunds.record_source, OLTP V009). Migrated MVP refunds: requested_at is the
+    -- MVP's recorded created_at; succeeded_at / failed_at are synthetic upper bounds and
+    -- failure_code 'legacy_unknown' is synthetic. API refunds: recorded by the system.
+    record_source,
+    record_source = 'migration_backfill'                                   as is_migrated,
+    case when record_source = 'migration_backfill' then 'mvp_recorded'
+         else 'database_clock' end                                         as requested_at_provenance,
+    case when status = 'requested' then null
+         when record_source = 'migration_backfill' then 'synthetic_upper_bound'
+         else 'recorded' end                                               as completed_at_provenance,
+    record_source = 'migration_backfill' and status = 'failed'             as failure_code_is_synthetic,
     created_at,
     updated_at,
     {{ utc_date('requested_at') }} as requested_date_utc,

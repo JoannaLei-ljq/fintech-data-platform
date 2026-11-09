@@ -45,7 +45,13 @@ summary as (
         min(occurred_at) filter (where lifecycle_status = 'captured')   as captured_occurred_at,
         min(occurred_at) filter (where lifecycle_status = 'failed')     as failed_occurred_at,
         bool_or(lifecycle_status = 'captured' and event_source = 'migration_backfill')
-                                                                       as captured_by_backfill
+                                                                       as captured_by_backfill,
+        bool_or(lifecycle_status = 'authorized' and event_source = 'migration_backfill')
+                                                                       as authorized_by_backfill,
+        bool_or(lifecycle_status = 'failed' and event_source = 'migration_backfill')
+                                                                       as failed_by_backfill,
+        bool_or(lifecycle_status = 'created' and event_source = 'migration_backfill')
+                                                                       as created_by_backfill
     from events
     group by transaction_id
 
@@ -66,6 +72,9 @@ select
     s.lifecycle_path in {{ legal_lifecycle_paths() }}    as is_valid_lifecycle,
     s.has_backfilled_events,
     coalesce(s.captured_by_backfill, false)              as captured_by_backfill,
+    coalesce(s.authorized_by_backfill, false)            as authorized_by_backfill,
+    coalesce(s.failed_by_backfill, false)                as failed_by_backfill,
+    coalesce(s.created_by_backfill, false)               as created_by_backfill,
     s.created_occurred_at,
     s.authorized_occurred_at,
     s.captured_occurred_at,

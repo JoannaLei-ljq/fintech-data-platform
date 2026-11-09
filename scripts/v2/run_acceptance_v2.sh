@@ -97,6 +97,8 @@ check "A 2026-10-15 cohort captured / rate" "$(daily 2026-10-15 "cohort_captured
 check "A 2026-10-15 outcome captured / rate" "$(daily 2026-10-15 "captured_amount_minor || ' ' || outcome_success_rate_pct")" "15000 66.67"
 check "A 2026-10-15 succeeded refunds" "$(daily 2026-10-15 succeeded_refund_amount_minor)" "3000"
 check "A synthetic capture times flagged" "$(daily 2026-10-15 estimated_capture_time_count)" "2"
+check "A synthetic failure / refund times flagged" "$(daily 2026-10-15 "estimated_failure_time_count || ' ' || estimated_refund_time_count || ' ' || has_estimated_dates")" "1 2 true"
+check "A migrated refunds carry explicit provenance" "$(q "SELECT string_agg(record_source, ',' ORDER BY refund_id) FROM raw.refunds")" "migration_backfill,migration_backfill"
 
 echo; echo "### Scenario A2: MVP parity after the pending payment 3004 completes (same day)"
 app <<'SQL'
@@ -136,6 +138,7 @@ TODAY=$(qo "SELECT (succeeded_at AT TIME ZONE 'UTC')::date FROM refunds WHERE re
 run_dag; pipeline_ok "C"
 check "C succeeded refund volume +1000 (failed and open excluded)" "$(( $(total succeeded_refund_amount_minor) - REFUNDS_BEFORE ))" "1000"
 check "C refund on its succeeded_at date ($TODAY)" "$(daily "$TODAY" succeeded_refund_amount_minor)" "1000"
+check "C API refunds are not flagged as estimates" "$(daily "$TODAY" "estimated_refund_time_count || ' ' || has_estimated_dates")" "0 false"
 check "C nothing on the capture date" "$(daily 2026-11-03 succeeded_refund_amount_minor)" "0"
 check "C original amount unchanged; refunds beside it" "$(q "SELECT amount_minor || ' ' || succeeded_refund_amount_minor || ' ' || failed_refund_amount_minor || ' ' || pending_refund_amount_minor || ' ' || remaining_refundable_amount_minor FROM marts.fct_payments WHERE transaction_id = 6001")" "4200 1000 500 700 2500"
 check "C captured volume unchanged" "$(total captured_amount_minor)" "$CAPTURED_BEFORE"

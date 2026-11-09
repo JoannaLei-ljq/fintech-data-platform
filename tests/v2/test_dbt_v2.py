@@ -101,6 +101,8 @@ def test_baseline_builds_and_matches_mvp_parity(env):
     assert (d["captured_amount_minor"], d["outcome_success_rate_pct"]) == (15000, Decimal("66.67"))
     assert d["succeeded_refund_amount_minor"] == 3000
     assert (d["created_payment_count"], d["cohort_in_flight_count"], d["estimated_capture_time_count"]) == (4, 1, 2)
+    # provenance: 3003's failure time and both migrated refunds' completion times are synthetic too
+    assert (d["estimated_failure_time_count"], d["estimated_refund_time_count"], d["has_estimated_dates"]) == (1, 2, True)
 
 
 def test_parity_after_the_pending_payment_completes(env):
@@ -157,7 +159,13 @@ def test_refunds_count_on_their_succeeded_date_and_only_when_succeeded(env):
                         "failed_refund_amount_minor, remaining_refundable_amount_minor, net_captured_amount_minor "
                         "FROM marts_candidate.fct_payments WHERE transaction_id = 6001").fetchone()
         assert row == (4200, 1000, 700, 500, 2500, 3200)
+        # refunds and payments created through the write functions are never flagged as estimates
+        assert c.execute("SELECT bool_or(is_migrated), bool_or(completed_at_provenance = 'synthetic_upper_bound') "
+                         "FROM staging.stg_refunds WHERE transaction_id = 6001").fetchone() == (False, False)
+        assert c.execute("SELECT created_at_provenance, captured_at_is_estimate FROM marts_candidate.fct_payments "
+                         "WHERE transaction_id = 6001").fetchone() == ("producer_reported", False)
         assert c.execute("SELECT count(*) FROM marts_candidate.fct_payments").fetchone()[0] == 5   # no fan-out
+    assert daily(env, today)["has_estimated_dates"] is False
 
 
 # --- negative tests: corrupted raw data is detected, not corrected -----------------------------

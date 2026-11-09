@@ -84,7 +84,7 @@ For the MVP demo both bases give $150 / 66.67% / $30, then $170 / 75% / $30.
 ### V2 limitations
 - **Not log-based CDC:** the sync replicates the latest state only. No hard deletes, and no intermediate versions of mutable rows; payment history survives through `payment_events`.
 - **Restores:** source restores require the generation-rotation and reinitialization runbook.
-- **Synthetic backfill:** migrated MVP rows carry synthetic, upper-bound lifecycle timestamps (flagged as estimates).
+- **Synthetic backfill:** migrated MVP payments and refunds carry synthetic, upper-bound lifecycle timestamps (authorization, capture, failure, refund completion) and a synthetic `legacy_unknown` failure code. They're labelled explicitly (event `source`, `refunds.record_source`, the `*_is_estimate` and provenance columns, and the marts' estimate counts); nothing is rewritten.
 - **Rebuilds and currency:** marts are rebuilt in full on every run, with no FX conversion.
 - **dbt** runs as the database owner. The local Docker Postgres trusts in-container connections, so it is not production-hardened.
 
