@@ -1,0 +1,80 @@
+### V2 Step 8 (Airflow orchestration and end-to-end acceptance) verification 2026-11-09T19:10:14Z on branch v2-analytics-orchestration
+
+### 1. Airflow: DAG discovery and import errors
+  dag_id is_paused
+  fintech_demo_pipeline False
+  payments_v2_pipeline False
+  import errors: No data found
+
+### 2. End-to-end acceptance through Airflow (full log: docs/evidence/acceptance_v2_20261109T190131Z.log)
+### V2 acceptance run 2026-11-09T19:01:31Z on v2-analytics-orchestration @ e7bd8cf
+### Summary: 72 passed, 0 failed
+  real DAG runs triggered: 11
+
+### 3. Latest payments_v2_pipeline runs (Airflow metadata)
+  manual__20261109T190417Z  success
+  manual__20261109T190400Z  success
+  manual__20261109T190344Z  success
+  manual__20261109T190329Z_inject_dbt  failed
+  manual__20261109T190317Z_inject_sync  failed
+  manual__20261109T190301Z  success
+  manual__20261109T190246Z  success
+  manual__20261109T190229Z  success
+  manual__20261109T190211Z  success
+  manual__20261109T190154Z  success
+  manual__20261109T190136Z  success
+  manual__20261109T185935Z  success
+
+### 4. pytest (tests/v2): 268 earlier tests + 9 reconciliation tests
+======================= 277 passed in 168.57s (0:02:48) ========================
+test_v2_reconcile.py::test_clean_pipeline_reconciles PASSED     [ 62%]
+test_v2_reconcile.py::test_source_changes_after_the_sync_are_pending_not_errors PASSED [ 62%]
+test_v2_reconcile.py::test_divergence_is_reported[UPDATE raw.users SET email = 'tampered@x' WHERE user_id = 1-UPDATE raw.users u SET email = 'alice@example.com' WHERE user_id = 1-source_vs_raw.users] PASSED [ 63%]
+test_v2_reconcile.py::test_divergence_is_reported[UPDATE marts.fct_payments SET amount_minor = amount_minor + 1 WHERE transaction_id = 3001-UPDATE marts.fct_payments SET amount_minor = amount_minor - 1 WHERE transaction_id = 3001-marts.payments.fct_payments] PASSED [ 63%]
+test_v2_reconcile.py::test_divergence_is_reported[UPDATE marts.fct_daily_payments SET succeeded_refund_amount_minor = succeeded_refund_amount_minor + 100-UPDATE marts.fct_daily_payments SET succeeded_refund_amount_minor = succeeded_refund_amount_minor - 100-marts.refunds.fct_daily_payments] PASSED [ 63%]
+test_v2_reconcile.py::test_divergence_is_reported[INSERT INTO raw.merchants VALUES (999, 'ghost', 'x', 'US', now(), now(), '1', 0, now())-DELETE FROM raw.merchants WHERE merchant_id = 999-source_vs_raw.merchants] PASSED [ 64%]
+test_v2_reconcile.py::test_reconcile_refuses_non_v2_databases[fintech_oltp-v2_analytics] PASSED [ 64%]
+test_v2_reconcile.py::test_reconcile_refuses_non_v2_databases[v2_oltp-fintech_analytics] PASSED [ 64%]
+test_v2_reconcile.py::test_reconcile_refuses_non_v2_databases[demo_oltp-v2_analytics] PASSED [ 65%]
+
+### 5. MVP regression after Step 8 (MVP DAG fintech_demo_pipeline through Airflow, demo_* only)
+### Acceptance run 2026-11-09T19:07:55Z
+### Versions: Airflow 3.3.2, dbt-core 1.12.5, PostgreSQL 16.15
+### Summary: 27 passed, 0 failed
+PASS  run 1 state  (Run state: success)
+PASS  run 1 success_amount  (150.00)
+PASS  run 1 success_rate_pct  (66.67)
+PASS  run 1 refund_amount  (30.00)
+PASS  run 1 transactions rows/distinct  (4/4)
+PASS  run 1 refunds rows/distinct  (2/2)
+PASS  run 1 summary on one UTC day  (1 2026-10-15)
+PASS  run 1 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 1 refunds not double counted (dbt test)  (1)
+PASS  run 1 refund amount checks (dbt test)  (1)
+PASS  run 2 state  (Run state: success)
+PASS  run 2 metrics, counts and checkpoint unchanged  (150.00 66.67 30.00 4 2 2026-10-15T15:00:00.000000/3004)
+PASS  run 3 state (expected to fail)  (Run state: failed)
+PASS  run 3 dbt_build did not run  (task dbt_build: upstream_failed)
+PASS  run 3 raw 3004 still pending (data rolled back)  (pending)
+PASS  run 3 transactions checkpoint unchanged (checkpoint rolled back)  (2026-10-15T15:00:00.000000/3004)
+PASS  run 3 summary still the pre-change value  (150.00 66.67)
+PASS  run 4 state  (Run state: success)
+PASS  run 4 dbt build (models + 22 tests)  (Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27)
+PASS  run 4 transactions rows/distinct  (4/4)
+PASS  run 4 raw 3004 now succeeded  (succeeded)
+PASS  run 4 checkpoint advanced  (advanced)
+PASS  run 4 metrics still on original UTC day  (1 2026-10-15)
+PASS  run 4 success_amount  (170.00)
+PASS  run 4 success_rate_pct  (75.00)
+PASS  run 4 refund_amount  (30.00)
+PASS  main database untouched  (4 transactions, 2 refunds, checkpoint 2026-02-03 16:20:09+00/1004)
+
+### 6. Security
+  sync task ran as: 11 succeeded as v2_sync_login
+  v2_sync privileges on dbt schemas (staging/intermediate/marts): 0
+  v2_sync table grants in raw/meta: 25 (unchanged from Step 6)
+  pg_hba rules: 7, ALTER SYSTEM settings: 0
+  protected database ACLs: fintech_oltp=default, fintech_analytics=default
+
+### 7. Protected databases: fingerprint before Step 0 vs after Step 8
+IDENTICAL (9 lines: row count + md5 for 9 tables in fintech_oltp / fintech_analytics)

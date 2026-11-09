@@ -1,0 +1,282 @@
+### V2 acceptance run 2026-11-09T19:01:31Z on v2-analytics-orchestration @ e7bd8cf
+### Airflow DAGs:
+  fintech_demo_pipeline
+  payments_v2_pipeline
+### Protected databases fingerprint before: d495b800ee6c
+
+### Reset: rebuild v2_oltp / v2_analytics from the seed
+NOTICE:  role "v2_sync_login" has already been granted membership in role "v2_sync" by role "fintech"
+applied  V001__baseline.sql
+applied  V002__v2_raw_and_sync_meta.sql
+applied  V003__sync_role_grants.sql
+
+### Scenario A: baseline
+Triggered payments_v2_pipeline run_id=manual__20261109T190136Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:01:39.908817+00:00  end=2026-11-09T19:01:40.319894+00:00
+  task dbt_build: success  start=2026-11-09T19:01:40.951569+00:00  end=2026-11-09T19:01:46.122076+00:00
+  task reconcile: success  start=2026-11-09T19:01:46.298411+00:00  end=2026-11-09T19:01:46.541448+00:00
+  task report: success  start=2026-11-09T19:01:47.395986+00:00  end=2026-11-09T19:01:47.618957+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190136Z/
+  [PASS] A run state: success
+  [PASS] A task order: v2_sync dbt_build reconcile report
+  [PASS] A tasks ran sequentially: sequential
+  [PASS] A source vs raw row counts: currencies=7/7 users=3/3 merchants=2/2 transactions=4/4 payment_events=9/9 refunds=2/2
+  [PASS] A fct_payments rows: 4
+  [PASS] A 2026-10-15 cohort captured / rate: 15000 66.67
+  [PASS] A 2026-10-15 outcome captured / rate: 15000 66.67
+  [PASS] A 2026-10-15 succeeded refunds: 3000
+  [PASS] A synthetic capture times flagged: 2
+
+### Scenario A2: MVP parity after the pending payment 3004 completes (same day)
+recorded
+recorded
+Triggered payments_v2_pipeline run_id=manual__20261109T190154Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:01:57.239472+00:00  end=2026-11-09T19:01:57.550470+00:00
+  task dbt_build: success  start=2026-11-09T19:01:57.880503+00:00  end=2026-11-09T19:02:03.149503+00:00
+  task reconcile: success  start=2026-11-09T19:02:04.199116+00:00  end=2026-11-09T19:02:04.624089+00:00
+  task report: success  start=2026-11-09T19:02:05.245495+00:00  end=2026-11-09T19:02:05.476424+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190154Z/
+  [PASS] A2 run state: success
+  [PASS] A2 task order: v2_sync dbt_build reconcile report
+  [PASS] A2 tasks ran sequentially: sequential
+  [PASS] A2 2026-10-15 cohort captured / rate: 17000 75.00
+  [PASS] A2 2026-10-15 outcome captured / rate: 17000 75.00
+  [PASS] A2 2026-10-15 succeeded refunds: 3000
+
+### Scenario B: new payment 6001, created Monday 2026-11-02, captured Tuesday 2026-11-03
+recorded
+recorded
+recorded
+Triggered payments_v2_pipeline run_id=manual__20261109T190211Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:02:14.366961+00:00  end=2026-11-09T19:02:14.717383+00:00
+  task dbt_build: success  start=2026-11-09T19:02:15.422786+00:00  end=2026-11-09T19:02:20.671663+00:00
+  task reconcile: success  start=2026-11-09T19:02:21.084302+00:00  end=2026-11-09T19:02:21.380620+00:00
+  task report: success  start=2026-11-09T19:02:22.151936+00:00  end=2026-11-09T19:02:22.405342+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190211Z/
+  [PASS] B run state: success
+  [PASS] B task order: v2_sync dbt_build reconcile report
+  [PASS] B tasks ran sequentially: sequential
+  [PASS] B 6001 in raw (transaction, events): captured 3
+  [PASS] B 6001 in staging: captured
+  [PASS] B 6001 in fct_payments: captured captured 4200
+  [PASS] B Monday: cohort counts it, capture volume does not: 1 4200 0
+  [PASS] B Tuesday: capture volume on the capture date: 0 1 4200
+  [PASS] B captured volume +4200 exactly once: 4200
+  [PASS] B payments +1: 1
+
+### Scenario C: partial refunds on 6001 (1000 succeeds, 500 fails, 700 stays open)
+succeeded
+failed
+Triggered payments_v2_pipeline run_id=manual__20261109T190229Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:02:32.132565+00:00  end=2026-11-09T19:02:32.464072+00:00
+  task dbt_build: success  start=2026-11-09T19:02:33.202568+00:00  end=2026-11-09T19:02:38.630034+00:00
+  task reconcile: success  start=2026-11-09T19:02:39.060433+00:00  end=2026-11-09T19:02:39.355757+00:00
+  task report: success  start=2026-11-09T19:02:40.161937+00:00  end=2026-11-09T19:02:40.387466+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190229Z/
+  [PASS] C run state: success
+  [PASS] C task order: v2_sync dbt_build reconcile report
+  [PASS] C tasks ran sequentially: sequential
+  [PASS] C succeeded refund volume +1000 (failed and open excluded): 1000
+  [PASS] C refund on its succeeded_at date (2026-11-09): 1000
+  [PASS] C nothing on the capture date: 0
+  [PASS] C original amount unchanged; refunds beside it: 4200 1000 500 700 2500
+  [PASS] C captured volume unchanged: 21200
+  [PASS] C payment status unchanged: captured
+
+### Scenario D: two more runs without source changes
+Triggered payments_v2_pipeline run_id=manual__20261109T190246Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:02:48.064125+00:00  end=2026-11-09T19:02:48.391164+00:00
+  task dbt_build: success  start=2026-11-09T19:02:49.133187+00:00  end=2026-11-09T19:02:54.331892+00:00
+  task reconcile: success  start=2026-11-09T19:02:55.343007+00:00  end=2026-11-09T19:02:55.594920+00:00
+  task report: success  start=2026-11-09T19:02:56.432737+00:00  end=2026-11-09T19:02:56.660988+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190246Z/
+  [PASS] D1 run state: success
+  [PASS] D1 task order: v2_sync dbt_build reconcile report
+  [PASS] D1 tasks ran sequentially: sequential
+  [PASS] D1 sync read 0 rows: 0
+Triggered payments_v2_pipeline run_id=manual__20261109T190301Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:03:04.204547+00:00  end=2026-11-09T19:03:04.505698+00:00
+  task dbt_build: success  start=2026-11-09T19:03:05.279074+00:00  end=2026-11-09T19:03:11.031147+00:00
+  task reconcile: success  start=2026-11-09T19:03:11.244044+00:00  end=2026-11-09T19:03:11.572396+00:00
+  task report: success  start=2026-11-09T19:03:12.330590+00:00  end=2026-11-09T19:03:12.611833+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190301Z/
+  [PASS] D2 run state: success
+  [PASS] D2 task order: v2_sync dbt_build reconcile report
+  [PASS] D2 tasks ran sequentially: sequential
+  [PASS] D financial digest identical after re-runs: 94224e6aa19082b25538b5e485f83a49
+  [PASS] D no duplicate payments/events/refunds: 0
+
+### Scenario E: the open refund (700) succeeds; then a sync failure, a dbt failure, and recovery
+succeeded
+Triggered payments_v2_pipeline run_id=manual__20261109T190317Z_inject_sync conf={"inject_failure": "sync"}
+Run state: failed
+  task v2_sync: failed  start=2026-11-09T19:03:20.159369+00:00  end=2026-11-09T19:03:20.495164+00:00
+  task dbt_build: upstream_failed  start=2026-11-09T19:03:21.207016+00:00  end=2026-11-09T19:03:21.207016+00:00
+  task reconcile: upstream_failed  start=2026-11-09T19:03:22.245095+00:00  end=2026-11-09T19:03:22.245095+00:00
+  task report: upstream_failed  start=2026-11-09T19:03:23.294111+00:00  end=2026-11-09T19:03:23.294111+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190317Z_inject_sync/
+  [PASS] E1 run state (sync failure injected): failed
+  [PASS] E1 task states: failed upstream_failed upstream_failed upstream_failed
+  [PASS] E1 checkpoint unchanged: 114835
+  [PASS] E1 raw refund still requested (rolled back): requested
+  [PASS] E1 marts unchanged: 94224e6aa19082b25538b5e485f83a49
+  [PASS] E1 failure recorded in meta.sync_runs: failed InjectedFailure
+Triggered payments_v2_pipeline run_id=manual__20261109T190329Z_inject_dbt conf={"inject_failure": "dbt"}
+Run state: failed
+  task v2_sync: success  start=2026-11-09T19:03:31.212732+00:00  end=2026-11-09T19:03:31.582173+00:00
+  task dbt_build: failed  start=2026-11-09T19:03:32.314984+00:00  end=2026-11-09T19:03:38.813920+00:00
+  task reconcile: upstream_failed  start=2026-11-09T19:03:39.155262+00:00  end=2026-11-09T19:03:39.155262+00:00
+  task report: upstream_failed  start=2026-11-09T19:03:40.187869+00:00  end=2026-11-09T19:03:40.187869+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190329Z_inject_dbt/
+  [PASS] E2 run state (dbt failure injected): failed
+  [PASS] E2 task states: success failed upstream_failed upstream_failed
+  [PASS] E2 sync itself committed (raw refund succeeded): succeeded
+Triggered payments_v2_pipeline run_id=manual__20261109T190344Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:03:46.530742+00:00  end=2026-11-09T19:03:46.881034+00:00
+  task dbt_build: success  start=2026-11-09T19:03:47.610512+00:00  end=2026-11-09T19:03:54.020598+00:00
+  task reconcile: success  start=2026-11-09T19:03:54.396662+00:00  end=2026-11-09T19:03:54.655890+00:00
+  task report: success  start=2026-11-09T19:03:55.496704+00:00  end=2026-11-09T19:03:55.803025+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190344Z/
+  [PASS] E3 recovery run state: success
+  [PASS] E3 recovery task order: v2_sync dbt_build reconcile report
+  [PASS] E3 recovery tasks ran sequentially: sequential
+  [PASS] E3 succeeded refunds +700 exactly once: 700
+  [PASS] E3 6001 refunds: 1700 0 2500
+  [PASS] E3 no duplicates: 5 5 14
+
+### Scenario F: a long-running writer; raw ingestion order differs from business order
+  holding 6002 (business time 08:00) uncommitted
+recorded
+recorded
+recorded
+Triggered payments_v2_pipeline run_id=manual__20261109T190400Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:04:03.374106+00:00  end=2026-11-09T19:04:03.693962+00:00
+  task dbt_build: success  start=2026-11-09T19:04:04.469012+00:00  end=2026-11-09T19:04:09.879572+00:00
+  task reconcile: success  start=2026-11-09T19:04:10.364455+00:00  end=2026-11-09T19:04:10.678604+00:00
+  task report: success  start=2026-11-09T19:04:11.461337+00:00  end=2026-11-09T19:04:11.718344+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190400Z/
+  [PASS] F1 run state: success
+  [PASS] F1 task order: v2_sync dbt_build reconcile report
+  [PASS] F1 tasks ran sequentially: sequential
+  [PASS] F1 raw has the later payment 6003, not the open 6002: 3 0
+  [PASS] F1 watermark held by the open writer (lag > 0): t
+  committed 6002
+recorded
+Triggered payments_v2_pipeline run_id=manual__20261109T190417Z conf={}
+Run state: success
+  task v2_sync: success  start=2026-11-09T19:04:19.357487+00:00  end=2026-11-09T19:04:19.692772+00:00
+  task dbt_build: success  start=2026-11-09T19:04:20.428772+00:00  end=2026-11-09T19:04:25.579981+00:00
+  task reconcile: success  start=2026-11-09T19:04:25.645327+00:00  end=2026-11-09T19:04:25.916566+00:00
+  task report: success  start=2026-11-09T19:04:26.246390+00:00  end=2026-11-09T19:04:26.496503+00:00
+Logs: airflow/logs/dag_id=payments_v2_pipeline/run_id=manual__20261109T190417Z/
+  [PASS] F2 run state: success
+  [PASS] F2 task order: v2_sync dbt_build reconcile report
+  [PASS] F2 tasks ran sequentially: sequential
+  [PASS] F2 6002 ingested after 6003 although it happened earlier: t
+  [PASS] F2 rows re-read because of the long writer: t
+  [PASS] F2 6002 state from event_sequence: captured captured 3
+  [PASS] F2 event issues: 0
+  [PASS] F2 2026-11-04 cohort / capture: 2 2 2700
+
+### Final KPIs (USD, minor units)
+  2026-10-15  created=4 cohort_captured=17000 cohort%=75.00 captured=17000 outcome%=75.00 refunds=3000 net=14000
+  2026-11-02  created=1 cohort_captured=4200 cohort%=100.00 captured=0 outcome%=- refunds=0 net=0
+  2026-11-03  created=0 cohort_captured=0 cohort%=- captured=4200 outcome%=100.00 refunds=0 net=4200
+  2026-11-04  created=2 cohort_captured=2700 cohort%=100.00 captured=2700 outcome%=100.00 refunds=0 net=2700
+  2026-11-09  created=0 cohort_captured=0 cohort%=- captured=0 outcome%=- refunds=1700 net=-1700
+### Sync runs
+  1 initial succeeded read=27 reread=0 dup_events=0 
+  2 incremental succeeded read=3 reread=0 dup_events=0 
+  3 incremental succeeded read=4 reread=0 dup_events=0 
+  4 incremental succeeded read=3 reread=0 dup_events=0 
+  5 incremental succeeded read=0 reread=0 dup_events=0 
+  6 incremental succeeded read=0 reread=0 dup_events=0 
+  7 incremental failed read=- reread=- dup_events=- InjectedFailure
+  8 incremental succeeded read=1 reread=0 dup_events=0 
+  9 incremental succeeded read=0 reread=0 dup_events=0 
+  10 incremental succeeded read=4 reread=0 dup_events=0 
+  11 incremental succeeded read=8 reread=4 dup_events=3 
+  [PASS] protected databases unchanged: d495b800ee6c
+
+### Summary: 72 passed, 0 failed
+PASS  A run state  (success)
+PASS  A task order  (v2_sync dbt_build reconcile report)
+PASS  A tasks ran sequentially  (sequential)
+PASS  A source vs raw row counts  (currencies=7/7 users=3/3 merchants=2/2 transactions=4/4 payment_events=9/9 refunds=2/2)
+PASS  A fct_payments rows  (4)
+PASS  A 2026-10-15 cohort captured / rate  (15000 66.67)
+PASS  A 2026-10-15 outcome captured / rate  (15000 66.67)
+PASS  A 2026-10-15 succeeded refunds  (3000)
+PASS  A synthetic capture times flagged  (2)
+PASS  A2 run state  (success)
+PASS  A2 task order  (v2_sync dbt_build reconcile report)
+PASS  A2 tasks ran sequentially  (sequential)
+PASS  A2 2026-10-15 cohort captured / rate  (17000 75.00)
+PASS  A2 2026-10-15 outcome captured / rate  (17000 75.00)
+PASS  A2 2026-10-15 succeeded refunds  (3000)
+PASS  B run state  (success)
+PASS  B task order  (v2_sync dbt_build reconcile report)
+PASS  B tasks ran sequentially  (sequential)
+PASS  B 6001 in raw (transaction, events)  (captured 3)
+PASS  B 6001 in staging  (captured)
+PASS  B 6001 in fct_payments  (captured captured 4200)
+PASS  B Monday: cohort counts it, capture volume does not  (1 4200 0)
+PASS  B Tuesday: capture volume on the capture date  (0 1 4200)
+PASS  B captured volume +4200 exactly once  (4200)
+PASS  B payments +1  (1)
+PASS  C run state  (success)
+PASS  C task order  (v2_sync dbt_build reconcile report)
+PASS  C tasks ran sequentially  (sequential)
+PASS  C succeeded refund volume +1000 (failed and open excluded)  (1000)
+PASS  C refund on its succeeded_at date (2026-11-09)  (1000)
+PASS  C nothing on the capture date  (0)
+PASS  C original amount unchanged; refunds beside it  (4200 1000 500 700 2500)
+PASS  C captured volume unchanged  (21200)
+PASS  C payment status unchanged  (captured)
+PASS  D1 run state  (success)
+PASS  D1 task order  (v2_sync dbt_build reconcile report)
+PASS  D1 tasks ran sequentially  (sequential)
+PASS  D1 sync read 0 rows  (0)
+PASS  D2 run state  (success)
+PASS  D2 task order  (v2_sync dbt_build reconcile report)
+PASS  D2 tasks ran sequentially  (sequential)
+PASS  D financial digest identical after re-runs  (94224e6aa19082b25538b5e485f83a49)
+PASS  D no duplicate payments/events/refunds  (0)
+PASS  E1 run state (sync failure injected)  (failed)
+PASS  E1 task states  (failed upstream_failed upstream_failed upstream_failed)
+PASS  E1 checkpoint unchanged  (114835)
+PASS  E1 raw refund still requested (rolled back)  (requested)
+PASS  E1 marts unchanged  (94224e6aa19082b25538b5e485f83a49)
+PASS  E1 failure recorded in meta.sync_runs  (failed InjectedFailure)
+PASS  E2 run state (dbt failure injected)  (failed)
+PASS  E2 task states  (success failed upstream_failed upstream_failed)
+PASS  E2 sync itself committed (raw refund succeeded)  (succeeded)
+PASS  E3 recovery run state  (success)
+PASS  E3 recovery task order  (v2_sync dbt_build reconcile report)
+PASS  E3 recovery tasks ran sequentially  (sequential)
+PASS  E3 succeeded refunds +700 exactly once  (700)
+PASS  E3 6001 refunds  (1700 0 2500)
+PASS  E3 no duplicates  (5 5 14)
+PASS  F1 run state  (success)
+PASS  F1 task order  (v2_sync dbt_build reconcile report)
+PASS  F1 tasks ran sequentially  (sequential)
+PASS  F1 raw has the later payment 6003, not the open 6002  (3 0)
+PASS  F1 watermark held by the open writer (lag > 0)  (t)
+PASS  F2 run state  (success)
+PASS  F2 task order  (v2_sync dbt_build reconcile report)
+PASS  F2 tasks ran sequentially  (sequential)
+PASS  F2 6002 ingested after 6003 although it happened earlier  (t)
+PASS  F2 rows re-read because of the long writer  (t)
+PASS  F2 6002 state from event_sequence  (captured captured 3)
+PASS  F2 event issues  (0)
+PASS  F2 2026-11-04 cohort / capture  (2 2 2700)
+PASS  protected databases unchanged  (d495b800ee6c)
+### Log saved to docs/evidence/acceptance_v2_20261109T190131Z.log

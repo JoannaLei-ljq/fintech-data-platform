@@ -437,3 +437,47 @@ raw.refunds ────────── stg_refunds ─┬─ int_refund_tota
 - **Full rebuilds:** marts are rebuilt in full on every run. That's fine at demo scale, but late events would need an incremental strategy with an event-date lookback later.
 - **Currency:** there's no FX, so no cross-currency totals.
 - **Partial captures** are not modeled. That's a Phase 1 rule enforced in OLTP.
+
+### Step 8: Airflow orchestration and end-to-end acceptance
+
+**DAG `payments_v2_pipeline`** (`airflow/dags/payments_v2_pipeline.py`):
+```
+v2_sync ──▶ dbt_build ──▶ reconcile ──▶ report
+```
+
+| Task | Runs | Notes |
+|---|---|---|
+| `v2_sync` | `python -m sync.v2_sync --source v2_oltp --target v2_analytics` | Least-privilege login `V2_SYNC_USER` from `.env`; a superuser is refused. Logs the run ID, rows read, inserted, updated and re-read, duplicate events, watermark and lag |
+| `dbt_build` | `dbt build` in `dbt/v2` (profile `fintech_v2`, target `v2`, `DBT_V2_DBNAME=v2_analytics`) | Artifacts in `/tmp/dbt-v2` inside the container, so it never collides with the MVP's `/tmp/dbt` |
+| `reconcile` | `python -m sync.v2_reconcile` | Read-only, 17 checks. Every OLTP row whose current version was visible to the last sync snapshot must be identical in raw (rows changed after it are reported as pending, not as errors). Payment counts, statuses, captured amounts and succeeded refunds must agree per currency between raw, `fct_payments`, both daily bases and the merchant mart, and with OLTP when nothing is pending. One row per payment; no event issues. Any FAIL fails the task |
+| `report` | `python -m sync.v2_report` | Sync run metrics, dbt results by node type, daily KPIs in major units (exact `Decimal` scaling), pipeline duration. Prints no credentials |
+
+**Run behavior:**
+- **Explicit V2 environment:** every task gets `V2_OLTP_DB`, `V2_ANALYTICS_DB` and `DBT_V2_DBNAME`.
+- **Upstream failures stop the run:** each task runs only if the previous one succeeded. A failed sync never reaches dbt, and a failed dbt build or reconciliation never produces a report.
+- **No overlap:** `max_active_runs=1` and `max_active_tasks=1`, plus the sync's own advisory lock.
+- **Retries:** `retries=0`, so failures are visible. Re-triggering is the recovery: the sync resumes from its last committed checkpoint and dbt rebuilds the marts in full.
+- **Timeouts:** `dagrun_timeout` 30 minutes, task `execution_timeout` 15 minutes.
+- **Schedule:** none (manual). Set `V2_PIPELINE_SCHEDULE` for a recurring one.
+- **Failure injection** (run conf `inject_failure`, demos only):
+  - `sync`: the sync raises after its writes, before commit;
+  - `dbt`: the singular test `assert_injected_failure` fails.
+
+**End-to-end acceptance** (`scripts/v2/run_acceptance_v2.sh`, 72 checks, every pipeline run is a real DAG run). The script rebuilds the V2 databases from the seed, then:
+
+| Scenario | What it does and checks |
+|---|---|
+| A | **Baseline:** source = raw row counts, then $150 / 66.67% / $30. **A2:** capture 3004 on the same day, giving $170 / 75% / $30. Both on the cohort and the outcome basis |
+| B | **New payment** created Monday and captured Tuesday through `record_payment_event`. It appears in raw, staging and marts. The cohort counts it on Monday and captured volume on Tuesday, exactly once |
+| C | **Refunds:** 1000 succeeded, 500 failed, 700 left open. Refunded volume rises by exactly 1000, on the `succeeded_at` date. The original amount, status and captured volume are unchanged, and the remaining refundable amount is 2500 |
+| D | **Two re-runs without changes:** the sync reads 0 rows, the financial digest of all marts is identical, and there are no duplicates |
+| E | **Sync failure:** dbt, reconcile and report never run, and the checkpoint, raw and marts are unchanged. **dbt failure:** reconcile and report never run. **Recovery** run: refunds rise by exactly 700 |
+| F | **Long-running writer:** a transaction holds payment 6002 (business time 08:00) open while 6003 (12:00) is captured and synced. 6002 is ingested by a later run (out of business order), the watermark lag and re-reads are recorded, and the state derived from `event_sequence` is correct |
+| End | Protected-database fingerprint unchanged |
+
+Note on scenario C: `request_refund` stamps `requested_at` with the database clock, so refunds created by the acceptance run carry today's date. Cross-day refund attribution (requested Wednesday, succeeded Friday) is covered by the dbt unit test `ut_daily_dates_follow_each_metric_basis`.
+
+**Limitations:**
+- **Coupling:** the DAG calls the CLIs inside the Airflow image (LocalExecutor). The dbt `run_results.json` handed to `report` relies on both tasks running in the same container.
+- **Failed dbt runs:** a failed dbt build may already have rebuilt some marts before the failing test. The run is still marked failed and nothing downstream runs; the next successful run rebuilds everything.
+- **dbt and reconciliation credentials:** both use the owner's credentials. Reconciliation sessions are read-only.

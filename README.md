@@ -1,4 +1,4 @@
-# Fintech Data Platform (MVP)
+# Fintech Data Platform (MVP + V2)
 
 A local batch pipeline for payment data:
 
@@ -16,6 +16,80 @@ demo_oltp (Postgres)  ──incremental sync──▶  demo_analytics.raw  ─�
 | Airflow | 3.3.2, LocalExecutor | UI at `http://127.0.0.1:8080` |
 | dbt | dbt-core 1.12.5 + dbt-postgres 1.11.0 | `dbt/`, runs inside the Airflow image |
 | Python sync | psycopg 3 | `sync/incremental_sync.py` |
+
+## V2: payment lifecycle, reliable sync, analytics and orchestration
+
+V2 rebuilds the pipeline around financial correctness. It runs only in its own databases (`v2_oltp`, `v2_analytics`); the MVP below is unchanged. Full design, proofs and runbooks: [`docs/v2/PHASE1_DESIGN.md`](docs/v2/PHASE1_DESIGN.md).
+
+```
+v2_oltp (OLTP)                         v2_analytics                                          Airflow: payments_v2_pipeline
+ transactions (current state)           raw.*  ── dbt/v2 ──▶ staging ─▶ intermediate ─▶ marts   v2_sync ─▶ dbt_build ─▶ reconcile ─▶ report
+ payment_events (append-only)  ──sync──▶ (latest   (6 views)  (event state,   fct_payments
+ refunds, currencies, users...   xid      state +             refund totals,  fct_daily_payments
+ written only via               water-    insert-only         event issues)   fct_merchant_performance
+ record_payment_event /          mark)    events, meta.*)
+ request_refund / complete_refund
+```
+
+- **OLTP rules:**
+  - integer minor units per currency;
+  - the payment lifecycle `created → authorized → captured`, plus `created/authorized → failed`;
+  - contiguous, idempotent event sequences;
+  - partial refunds that can never exceed the captured amount;
+  - writes only through `SECURITY DEFINER` functions.
+- **Sync:** a transaction-ID watermark (`sync_xid`) over one `REPEATABLE READ` snapshot. Data and checkpoint commit together. Payment events are insert-only, and a conflicting re-read fails the run. It runs as a least-privilege login, and blocks if the source identity changes.
+- **dbt** (`dbt/v2`, profile `fintech_v2`, target `v2`):
+  - it derives payment state from `event_sequence` only, and flags malformed histories rather than repairing them;
+  - refunded volume counts **succeeded** refunds on their `succeeded_at` date;
+  - currencies are never added together;
+  - 81 data tests and 6 unit tests run in every build.
+- **Airflow `payments_v2_pipeline`:** sync → dbt build → reconciliation (OLTP ↔ raw ↔ marts) → report. It's manual by default, runs one at a time, and a failed run is safe to re-trigger.
+
+### Run V2 locally
+```bash
+docker compose up -d
+```
+```bash
+./scripts/v2/reset_v2.sh
+```
+That rebuilds `v2_oltp` / `v2_analytics` from the seed, applies all migrations and provisions the sync login.
+
+```bash
+./scripts/v2/trigger_v2_dag.sh
+```
+That runs the full pipeline through Airflow. `sync` or `dbt` as an argument injects a failure.
+
+```bash
+./scripts/v2/run_acceptance_v2.sh
+```
+That's the end-to-end acceptance (Scenarios A–F, 72 checks) through Airflow, writing `docs/evidence/acceptance_v2_*.log`.
+
+```bash
+.venv/bin/python -m pytest
+```
+That's the V2 test suite (disposable `v2_test_*` databases; needs Postgres running).
+
+The pieces individually: `python -m sync.v2_sync` (least-privilege login from `.env`), `cd dbt/v2 && dbt build --profiles-dir ..`, `python -m sync.v2_reconcile`, `python -m sync.v2_report`. The UI is at `http://127.0.0.1:8080`. For an optional schedule, set `V2_PIPELINE_SCHEDULE` (e.g. `@hourly`) in `.env` and restart the Airflow services.
+
+### V2 metrics, in short
+Everything is per currency, in minor units. Exact definitions are in the design doc (Step 7).
+- **Captured volume:** by capture date.
+- **Success rate:** captured / (captured + failed), with in-flight payments excluded. Two clearly labelled bases: *cohort* (by creation date) and *outcome* (by capture or failure date).
+- **Refunded volume:** succeeded refunds by `succeeded_at`.
+- **Net captured:** captured − refunded, on event dates.
+
+For the MVP demo both bases give $150 / 66.67% / $30, then $170 / 75% / $30.
+
+### V2 limitations
+- **Not log-based CDC:** the sync replicates the latest state only. No hard deletes, and no intermediate versions of mutable rows; payment history survives through `payment_events`.
+- **Restores:** source restores require the generation-rotation and reinitialization runbook.
+- **Synthetic backfill:** migrated MVP rows carry synthetic, upper-bound lifecycle timestamps (flagged as estimates).
+- **Rebuilds and currency:** marts are rebuilt in full on every run, with no FX conversion.
+- **dbt** runs as the database owner. The local Docker Postgres trusts in-container connections, so it is not production-hardened.
+
+## MVP
+
+Everything below describes the original MVP (unchanged).
 
 ## Databases
 
