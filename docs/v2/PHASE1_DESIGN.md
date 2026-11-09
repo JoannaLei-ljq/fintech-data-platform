@@ -1,6 +1,6 @@
 # V2 Phase 1: approved design and implementation notes
 
-Status: Steps 0–5 approved and implemented on branch `v2-phase1`. Steps 6–8 still need approval.
+Status: Steps 0–6 approved and implemented on branch `v2-phase1`. Steps 7–8 still need approval.
 The MVP is frozen at tag `v0.1.0-mvp`.
 
 ## Isolation and safety
@@ -164,7 +164,6 @@ The MVP never recorded *when* authorization, capture or failure happened, only w
 ### Remaining gaps after Step 4
 - **A superuser can still bypass the protections.** It can disable triggers, set `session_replication_role = replica`, or write as owner while keeping state and history consistent. Privileges and the commit-time checks bound this, but don't remove it.
 - **The table owner (the migration user) can still write directly,** as long as the result is a legal, consistent history. This is intended for repairs. Using it requires the owner's credentials, which application code must not have.
-- **`v2_analytics` is still at the V001 baseline.** Its schema changes come with the sync engine in Step 6.
 
 ### Step 5: refund processing (`V006__refund_processing`)
 
@@ -218,3 +217,84 @@ The MVP never recorded *when* authorization, capture or failure happened, only w
 - Every refund decision for a payment is serialized on that payment's row lock. Different payments never block each other.
 - Refund functions and payment events for the *same* payment wait for each other briefly.
 - Sequences are not transactional, so refund IDs can have gaps after rollbacks.
+
+### Step 6: V2 incremental sync (`V007__sync_watermark`, analytics `V002__v2_raw_and_sync_meta`, `sync/v2_sync.py`)
+
+**Why not timestamps.** A cursor on `updated_at` (set to the transaction's start time) or `received_at` (insert time) assumes rows become visible in timestamp order. They become visible at commit, so a transaction that commits late is skipped for good. This was reproduced, then measured: across 5 concurrent fuzz runs, a timestamp cursor left 221 rows missing or stale, and the transaction-ID watermark left 0. A lookback window only narrows the gap.
+
+**Source side (V007).**
+- **`sync_xid xid8`:**
+  - added to `users`, `merchants`, `currencies`, `transactions`, `refunds` and `payment_events`, with an index on each;
+  - stamped by a `BEFORE INSERT OR UPDATE` trigger with `pg_current_xact_id()`, the top-level ID of the writing transaction;
+  - a trigger rather than a column default, so an explicit value can't override it;
+  - not the tuple's own `xmin`: inside savepoints and the write functions' exception blocks, that holds a subtransaction ID;
+  - rows that already existed keep `'0'` and are read by the first full sync.
+- **`sync_source_identity`:**
+  - holds an explicit `generation_id` that every rebuild creates fresh;
+  - `rotate_sync_source_generation(reason)` must be called after any restore from a backup or copy.
+
+**Algorithm (one run).**
+1. **Serialize.** Take a session advisory lock on the target. A concurrent attempt is rejected and recorded as `rejected`. Runs left `running` by a dead process are marked `abandoned`.
+2. **Open one source snapshot.** `REPEATABLE READ READ ONLY`. Its first statement fixes snapshot S and reads the source identity. Every table is read from S, so a child row is never visible without its parent.
+3. **Check it is safe to continue.** The run refuses (`blocked`) if:
+   - the state is already blocked;
+   - any identity field changed (generation, system identifier, database OID, name);
+   - the stored watermark or snapshot is ahead of S. That check is `W <= pg_snapshot_xmin(S)` and `pg_snapshot_xmax(previous) <= pg_snapshot_xmax(S)`, evaluated by PostgreSQL.
+4. **Read.** Every row with `sync_xid >= W`, as `xid8` comparisons in SQL. Transaction IDs are never compared in Python.
+5. **Write, in one target transaction:**
+   - upsert mutable tables unconditionally (committed runs are applied in order; no `updated_at` or `sync_xid` comparison);
+   - insert new events and check every re-read event against its stored copy;
+   - store `W := pg_snapshot_xmin(S)`, S itself, the identity and the run's metrics.
+
+   Any error rolls all of it back, and the run row records the failure in a separate transaction.
+
+**Why nothing is missed.** For any row version visible in S, written by transaction X:
+- If X ≥ W, this run reads it.
+- If X < W, X had finished at the previous snapshot, so the version was visible there and was read by an earlier run (induction).
+- A transaction unfinished at S has an ID ≥ `pg_snapshot_xmin(S)`, the new W.
+- A transaction that first writes after S gets an ID ≥ `pg_snapshot_xmax(S)`.
+- `xmax` is one past the highest *completed* ID. So an in-progress ID at or above `xmax` isn't listed in `pg_snapshot_xip`. It is still ≥ `xmin`, which is what matters (`test_xid8_and_snapshot_boundary_semantics`).
+
+**Why committed runs are applied in order.** A newer row version can carry *both* an older `updated_at` and a lower `sync_xid` than the version already synced. Example: a transaction that started earlier, or got its ID earlier, updates the row after another transaction committed. Comparing either value would keep the stale version. Runs are serialized and each snapshot is later than the last, so the last committed run holds the newest version.
+
+**Events.**
+- `raw.payment_events` is insert-only (a trigger refuses `UPDATE` and `DELETE`).
+- A re-read event must equal the stored copy, and a different event must not claim a stored `(transaction_id, event_sequence)`.
+- Either case fails the run with `EventConflict`, records the conflict in `meta.sync_conflicts`, and leaves data and checkpoint unchanged.
+- Ingestion order is snapshot order. Business order comes from `event_sequence`, downstream in Step 7.
+
+**Source identity and stale checkpoints.**
+- The four identity fields catch an in-place rebuild (new generation and OID) and a `rotate_sync_source_generation()` call.
+- They don't catch every restore. A restore that copies the generation row into a database with the same name, OID and cluster would look identical. That's why the procedure must rotate the generation, and why the watermark-ahead check (`W <= pg_snapshot_xmin(S)`) also catches a transaction counter that went backwards.
+- Once blocked, the sync stays blocked until an explicit `--reinitialize`. That truncates `raw.*` and reloads from W = 0, in one transaction.
+- A target with raw data but no state is refused too.
+
+**Runbook.**
+- **Rebuild the source:** `scripts/v2/reset_v2.sh` (both databases).
+- **Restore the source:** run `SELECT rotate_sync_source_generation('<reason>')` before any sync, then `python -m sync.v2_sync --reinitialize`.
+- **Reprocess:** `--lookback-runs N` re-reads the windows of the last N successful runs. It's idempotent; duplicate events are counted, not reinserted.
+- **Inject a failure:** `--fail-before-commit` raises after all target writes.
+
+**Monitoring** (`meta.sync_runs`):
+- `rows_read`, `rows_inserted` and `rows_updated` per table;
+- `rows_reread`: rows already visible in the previous snapshot, counted with `pg_visible_in_snapshot`;
+- `duplicate_events`;
+- `watermark_lag_xids`: snapshot xmax − xmin, a reporting-only numeric conversion;
+- `oldest_open_writer_secs`: the oldest open writing transaction at the source;
+- `error_class` and `error_message`.
+
+An open writer holds W at its ID, and each run then re-reads everything since. The metrics expose this. The fix belongs at the source: `idle_in_transaction_session_timeout` and alerting.
+
+**What is guaranteed, and under which assumptions.**
+- **Guarantee:** after a successful run, `raw.*` holds the latest state of every source row committed before that run's snapshot.
+- **Assumptions:**
+  - every write goes through tables that have the `sync_xid` trigger, and no one disables triggers (only a superuser can);
+  - the sync reads the primary database;
+  - runs use this engine, so they are serialized;
+  - restores follow the runbook.
+- **Not captured:**
+  - hard deletes (the V2 payment tables refuse deletes; users and merchants don't);
+  - intermediate versions of mutable rows that changed more than once between runs. Payment history is still complete through the append-only `payment_events`, and refund timelines through `requested_at` and `succeeded_at`.
+- **Compared with log-based CDC:** CDC would stream every committed change, including deletes, in commit order. It needs `wal_level = logical`, a replication slot (unread WAL can fill the disk) and a consumer, and psycopg 3 doesn't implement that protocol.
+
+**Analytics V002.** It replaces the MVP-shaped `raw.*` tables and `meta.sync_checkpoints` in `v2_analytics` with V2-shaped ones, and refuses to run if they hold data. The MVP sync never targets `v2_analytics`.
