@@ -9,12 +9,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import psycopg
+import psycopg.sql
 import pytest
 
 from payments.events import PaymentEvent, record_payment_event
 from payments.refunds import complete_refund, request_refund
 from sync.v2_sync import (TABLES, EventConflict, InjectedFailure, SourceIdentityChanged, SyncAlreadyRunning,
-                          SyncBlocked, run_sync)
+                          SyncBlocked, SyncCredentials)
+from sync.v2_sync import run_sync as engine_run_sync
 from tests.v2.conftest import (ANALYTICS_MIGRATIONS, MVP_DEMO_SEED, OLTP_MIGRATIONS, _admin, connect, quiet,
                                run_sql_file)
 from tests.v2.test_lifecycle import build
@@ -26,12 +28,36 @@ T0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
 SEED_COUNTS = {"currencies": 7, "users": 3, "merchants": 2, "transactions": 4, "refunds": 2, "payment_events": 9}
 
 
+SYNC_LOGIN: list[SyncCredentials] = []
+
+
 @pytest.fixture
-def dbs(make_db) -> tuple[str, str]:
-    source = build(make_db, "sync_src")                 # V001 + MVP seed + V002..V007
+def dbs(make_db):
+    """Source (V001 + MVP seed + all later migrations), target (analytics migrations), and a
+    temporary least-privilege login (member of v2_sync only) that every run_sync() below uses."""
+    source = build(make_db, "sync_src")
     target = make_db("sync_tgt")
-    migrate(target, ANALYTICS_MIGRATIONS, log=quiet)    # V001 + V002
-    return source, target
+    migrate(target, ANALYTICS_MIGRATIONS, log=quiet)
+    login = SyncCredentials(f"v2_test_sync_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex)
+    with _admin() as admin:
+        admin.execute(psycopg.sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} IN ROLE v2_sync").format(
+            psycopg.sql.Identifier(login.user), psycopg.sql.Literal(login.password)))
+    SYNC_LOGIN.append(login)
+    yield source, target
+    SYNC_LOGIN.remove(login)
+    with _admin() as admin:
+        assert login.user.startswith("v2_test_sync_")
+        admin.execute(psycopg.sql.SQL("DROP ROLE {}").format(psycopg.sql.Identifier(login.user)))
+
+
+def run_sync(source: str, target: str, **kwargs):
+    """Normal execution: the least-privilege sync login, superuser refused."""
+    return engine_run_sync(source, target, credentials=SYNC_LOGIN[-1], **kwargs)
+
+
+def admin_sync(source: str, target: str, **kwargs):
+    """Operator procedures (reinitialization) with the owner's credentials."""
+    return engine_run_sync(source, target, credentials=SyncCredentials.admin(), allow_superuser=True, **kwargs)
 
 
 def app(db: str) -> psycopg.Connection:
@@ -527,7 +553,7 @@ def test_source_reset_blocks_until_explicit_reinitialization(dbs):
     assert state(tgt)[2] == "blocked" and raw_snapshot(tgt) == before
     with pytest.raises(SyncBlocked, match="blocked"):          # stays blocked, never silently resumes
         run_sync(src, tgt)
-    r = run_sync(src, tgt, reinitialize=True)
+    r = admin_sync(src, tgt, reinitialize=True)
     assert (r.mode, r.watermark_from, r.rows_read) == ("reinitialize", "0", SEED_COUNTS)
     assert_raw_matches_source(src, tgt)                         # the old source's extra payment is gone
     assert state(tgt)[2:4] == ("active", None)
@@ -565,7 +591,7 @@ def test_missing_state_with_populated_raw_is_refused(dbs):
         c.execute("DELETE FROM meta.sync_state")
     with pytest.raises(SyncBlocked, match="no sync state"):
         run_sync(src, tgt)
-    assert run_sync(src, tgt, reinitialize=True).status == "succeeded"
+    assert admin_sync(src, tgt, reinitialize=True).status == "succeeded"
 
 
 # --- lookback boundaries ------------------------------------------------------------------------
@@ -692,7 +718,7 @@ def test_raw_payment_events_are_insert_only(dbs):
                                            ("demo_oltp", "v2_analytics"), ("v2_oltp", "demo_analytics")])
 def test_sync_refuses_non_v2_databases_before_connecting(source, target):
     with pytest.raises(UnsafeDatabaseTarget):
-        run_sync(source, target)
+        engine_run_sync(source, target, credentials=SyncCredentials("v2_unused", "unused"))
 
 
 def test_analytics_v002_refuses_to_replace_populated_mvp_tables(make_db):

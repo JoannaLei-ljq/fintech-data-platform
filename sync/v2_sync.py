@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -38,7 +39,7 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg import sql
 
-from sync.incremental_sync import conninfo
+from sync.incremental_sync import require_env
 from tools.db_guard import assert_connected_to, assert_writable
 
 log = logging.getLogger("v2_sync")
@@ -106,6 +107,42 @@ class InjectedFailure(SyncError):
     """Raised by fail_before_commit after all target writes, to prove they roll back together."""
 
 
+class SuperuserRefused(SyncError):
+    """Normal execution must use the least-privilege sync login, not a superuser."""
+
+
+class ReinitializationNotPermitted(SyncError):
+    """Reinitialization truncates raw.*; the least-privilege sync role cannot, by design."""
+
+
+@dataclass(frozen=True)
+class SyncCredentials:
+    user: str
+    password: str = field(repr=False)
+
+    @classmethod
+    def from_env(cls) -> "SyncCredentials":
+        """The least-privilege sync login (member of v2_sync): V2_SYNC_USER / V2_SYNC_PASSWORD."""
+        return cls(os.getenv("V2_SYNC_USER", "v2_sync_login"), require_env("V2_SYNC_PASSWORD"))
+
+    @classmethod
+    def admin(cls) -> "SyncCredentials":
+        """The database owner (break-glass and operator procedures such as reinitialization)."""
+        return cls(os.getenv("POSTGRES_USER", "fintech"), require_env("POSTGRES_PASSWORD"))
+
+    def conninfo(self, dbname: str) -> str:
+        return psycopg.conninfo.make_conninfo(host=os.getenv("POSTGRES_HOST", "127.0.0.1"),
+                                              port=os.getenv("POSTGRES_PORT", "5434"),
+                                              user=self.user, password=self.password, dbname=dbname)
+
+
+def _refuse_superuser(conn: psycopg.Connection, allow_superuser: bool) -> None:
+    if not allow_superuser and conn.execute(
+            "SELECT rolsuper FROM pg_roles WHERE rolname = current_user").fetchone()[0]:
+        raise SuperuserRefused("refusing to sync as a superuser; use the v2_sync login "
+                               "(or allow_superuser / --as-admin for operator procedures)")
+
+
 @dataclass
 class RunResult:
     run_id: int
@@ -135,15 +172,21 @@ class SourceIdentity:
 
 def run_sync(source_db: str = "v2_oltp", target_db: str = "v2_analytics", *, reinitialize: bool = False,
              lookback_runs: int = 0, fail_before_commit: bool = False,
+             credentials: SyncCredentials | None = None, allow_superuser: bool = False,
              before_target_commit: Callable[[], None] | None = None) -> RunResult:
-    """Run one sync. Raises a SyncError subclass on refusal or failure (the run row records it)."""
+    """Run one sync. Raises a SyncError subclass on refusal or failure (the run row records it).
+
+    Connects as the least-privilege sync login (SyncCredentials.from_env()) unless credentials
+    are given; a superuser is refused unless allow_superuser is set explicitly."""
     assert_writable(source_db, allowed_prefixes=V2_PREFIXES, purpose="V2 sync source")
     assert_writable(target_db, allowed_prefixes=V2_PREFIXES, purpose="V2 sync target")
     if lookback_runs < 0:
         raise ValueError("lookback_runs must be >= 0")
+    creds = credentials or SyncCredentials.from_env()
 
-    with psycopg.connect(conninfo(target_db), autocommit=True) as target:
+    with psycopg.connect(creds.conninfo(target_db), autocommit=True) as target:
         assert_connected_to(target, target_db)
+        _refuse_superuser(target, allow_superuser)
         if not target.execute("SELECT pg_try_advisory_lock(%s, %s)", LOCK_KEY).fetchone()[0]:
             run_id = _insert_run(target, "incremental", lookback_runs, status="rejected")
             message = "another sync run holds the target lock"
@@ -158,8 +201,8 @@ def run_sync(source_db: str = "v2_oltp", target_db: str = "v2_analytics", *, rei
             mode = "reinitialize" if reinitialize else ("initial" if state is None else "incremental")
             run_id = _insert_run(target, mode, lookback_runs)
             try:
-                result = _run(source_db, target, run_id, mode, state, lookback_runs, fail_before_commit,
-                              before_target_commit)
+                result = _run(source_db, creds, allow_superuser, target, run_id, mode, state, lookback_runs,
+                              fail_before_commit, before_target_commit)
             except Exception as exc:
                 _record_failure(target, run_id, exc)
                 raise
@@ -171,11 +214,18 @@ def run_sync(source_db: str = "v2_oltp", target_db: str = "v2_analytics", *, rei
 
 # --- one run -----------------------------------------------------------------------------------
 
-def _run(source_db: str, target: psycopg.Connection, run_id: int, mode: str, state: dict | None,
-         lookback_runs: int, fail_before_commit: bool,
+def _run(source_db: str, creds: SyncCredentials, allow_superuser: bool, target: psycopg.Connection, run_id: int,
+         mode: str, state: dict | None, lookback_runs: int, fail_before_commit: bool,
          before_target_commit: Callable[[], None] | None) -> RunResult:
-    with psycopg.connect(conninfo(source_db)) as source:
+    if mode == "reinitialize" and not target.execute(
+            "SELECT bool_and(has_table_privilege(format('raw.%%I', t), 'TRUNCATE')) FROM unnest(%s::text[]) t",
+            ([t.name for t in TABLES],)).fetchone()[0]:
+        raise ReinitializationNotPermitted(
+            "reinitialization truncates raw.* and is an operator procedure: rerun with the owner's credentials "
+            "(python -m sync.v2_sync --as-admin --reinitialize)")
+    with psycopg.connect(creds.conninfo(source_db)) as source:
         assert_connected_to(source, source_db)
+        _refuse_superuser(source, allow_superuser)
         source.rollback()                       # end the check's transaction; the sync snapshot starts below
         source.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
         source.read_only = True
@@ -190,11 +240,9 @@ def _run(source_db: str, target: psycopg.Connection, run_id: int, mode: str, sta
                    (SELECT oid::bigint FROM pg_database WHERE datname = current_database()),
                    current_database()""").fetchone()
         identity = SourceIdentity(generation, sysid, dboid, dbname)
-        oldest_writer = source.execute("""
-            SELECT extract(epoch FROM clock_timestamp() - min(xact_start))::numeric(12, 3)
-            FROM pg_stat_activity
-            WHERE datname = current_database() AND backend_xid IS NOT NULL AND pid <> pg_backend_pid()
-            """).fetchone()[0]                                                        # metric only
+        # Metric only, via the narrow SECURITY DEFINER helper (V008): other sessions' transaction
+        # details in pg_stat_activity are hidden from the unprivileged sync role.
+        oldest_writer = source.execute("SELECT sync_oldest_open_writer_secs()").fetchone()[0]
 
         watermark_from, prev_snapshot = _starting_point(source, target, mode, state, identity, snap, lookback_runs)
 
@@ -414,14 +462,18 @@ def main() -> None:
                         help="also re-read the windows of the last N successful runs (safe reprocessing)")
     parser.add_argument("--fail-before-commit", action="store_true",
                         help="raise after all target writes, before commit (failure injection)")
+    parser.add_argument("--as-admin", action="store_true",
+                        help="connect with the owner's credentials (operator procedures such as --reinitialize); "
+                             "normal runs use the least-privilege V2_SYNC_USER login")
     args = parser.parse_args()
+    creds = SyncCredentials.admin() if args.as_admin else SyncCredentials.from_env()
     try:
         r = run_sync(args.source, args.target, reinitialize=args.reinitialize, lookback_runs=args.lookback_runs,
-                     fail_before_commit=args.fail_before_commit)
+                     fail_before_commit=args.fail_before_commit, credentials=creds, allow_superuser=args.as_admin)
     except SyncError as exc:
         print(f"sync {exc.status}: {type(exc).__name__}: {exc}")
         raise SystemExit(2)
-    print(f"run {r.run_id} {r.mode} {r.status}: watermark {r.watermark_from} -> {r.watermark_to}, "
+    print(f"run {r.run_id} {r.mode} {r.status} as {creds.user}: watermark {r.watermark_from} -> {r.watermark_to}, "
           f"read {r.rows_read}, inserted {r.rows_inserted}, updated {r.rows_updated}, re-read {r.rows_reread}, "
           f"duplicate events {r.duplicate_events}, lag {r.watermark_lag_xids} xids, "
           f"oldest open writer {'-' if r.oldest_open_writer_secs is None else f'{r.oldest_open_writer_secs}s'}")

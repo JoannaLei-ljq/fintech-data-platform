@@ -269,9 +269,7 @@ The MVP never recorded *when* authorization, capture or failure happened, only w
 - Once blocked, the sync stays blocked until an explicit `--reinitialize`. That truncates `raw.*` and reloads from W = 0, in one transaction.
 - A target with raw data but no state is refused too.
 
-**Runbook.**
-- **Rebuild the source:** `scripts/v2/reset_v2.sh` (both databases).
-- **Restore the source:** run `SELECT rotate_sync_source_generation('<reason>')` before any sync, then `python -m sync.v2_sync --reinitialize`.
+**Runbook.** See *Step 6 hardening* below for the full source-restore procedure. Day to day:
 - **Reprocess:** `--lookback-runs N` re-reads the windows of the last N successful runs. It's idempotent; duplicate events are counted, not reinserted.
 - **Inject a failure:** `--fail-before-commit` raises after all target writes.
 
@@ -298,3 +296,58 @@ An open writer holds W at its ID, and each run then re-reads everything since. T
 - **Compared with log-based CDC:** CDC would stream every committed change, including deletes, in commit order. It needs `wal_level = logical`, a replication slot (unread WAL can fill the disk) and a consumer, and psycopg 3 doesn't implement that protocol.
 
 **Analytics V002.** It replaces the MVP-shaped `raw.*` tables and `meta.sync_checkpoints` in `v2_analytics` with V2-shaped ones, and refuses to run if they hold data. The MVP sync never targets `v2_analytics`.
+
+### Step 6 hardening: least-privilege sync (`V008__sync_role`, analytics `V003__sync_role_grants`)
+
+Normal sync runs no longer need a superuser. `python -m sync.v2_sync` connects as `V2_SYNC_USER` (default `v2_sync_login`), using `V2_SYNC_PASSWORD` from `.env`. The engine refuses a superuser connection unless `allow_superuser` / `--as-admin` is given explicitly.
+
+**Roles.** All are cluster-wide. NOLOGIN roles are created only if missing, and refused if they carry LOGIN or elevated attributes.
+
+| Role | Kind | Purpose |
+|---|---|---|
+| `v2_sync` | NOLOGIN group | Holds every sync privilege; is a member of nothing |
+| `v2_sync_login` | LOGIN | Member of `v2_sync` only. Created by `scripts/v2/provision_sync_login.sh`, which `reset_v2.sh` calls. The password is generated into `.env` if missing and never printed |
+| `v2_sync_stats` | NOLOGIN | Member of `pg_read_all_stats`. Owns one helper; nobody is granted it |
+
+**What the sync needs, and how it gets it.**
+
+| Need | Source of the privilege |
+|---|---|
+| `SELECT` on the 6 synced tables and `sync_source_identity` (`v2_oltp`) | Granted to `v2_sync` |
+| `pg_current_snapshot`, `pg_snapshot_*`, `pg_visible_in_snapshot` | Executable by `PUBLIC` by default |
+| `pg_control_system()` (system identifier for the identity check) | Executable by `PUBLIC` in PostgreSQL 16 (verified as an unprivileged role), so identity verification needs no grant and no privileged helper |
+| Age of the oldest open writing transaction (monitoring only) | Other users' `xact_start` is hidden from unprivileged roles (`backend_xid` is not). The `SECURITY DEFINER` function `sync_oldest_open_writer_secs()` (owner `v2_sync_stats`, `search_path = pg_catalog, pg_temp`, no `PUBLIC` execute) returns just that number for the current database |
+| Target writes (`v2_analytics`) | `SELECT`/`INSERT`/`UPDATE` on the mutable `raw.*` tables, `meta.sync_state` and `meta.sync_runs`; `SELECT`/`INSERT` on `raw.payment_events` and `meta.sync_conflicts`; the two sequences; `CONNECT` and `TEMPORARY` |
+
+**Rejected alternatives for the monitoring metric:**
+- Granting `pg_read_all_stats` to the sync role itself would expose every session's query text across the whole cluster, including the protected databases.
+- A helper owned by a superuser would run custom code with superuser rights.
+
+**Not granted to the sync role:**
+- **On the source:** any write; the payment and refund write functions; `rotate_sync_source_generation()`.
+- **On the target:** `DELETE` or `TRUNCATE` anywhere; `UPDATE` on raw events; DDL; disabling triggers.
+- **Membership:** none in the payment roles, `v2_sync_stats` or `pg_read_all_stats`.
+
+Reinitialization truncates `raw.*`, so it's an **operator procedure** run with the owner's credentials (`--as-admin`). The sync role is refused with `ReinitializationNotPermitted`.
+
+**Protected databases.**
+- The sync role holds no privilege on any table in `fintech_oltp` or `fintech_analytics` (tested with read-only probes).
+- The engine also refuses any non-`v2_` database before connecting.
+- **Remaining gap:** like every role, it can still *open a connection* to those databases and read their system catalogs, because PostgreSQL grants `CONNECT` to `PUBLIC` by default. Closing that requires either `REVOKE CONNECT ... FROM PUBLIC` on the protected databases, or a `pg_hba.conf` reject rule. Both change protected or cluster configuration, so they're left for an explicit decision.
+- **Also open:** inside the container, `pg_hba` trusts local connections. That's a property of the Docker image setup, outside the sync.
+
+**Source restore: limitation and mandatory runbook.**
+- **What's detected automatically:**
+  - **In-place rebuild:** a new `generation_id` and database OID.
+  - **Rotated generation.**
+  - **Backwards transaction counter:** a restore into a cluster whose counter is behind the stored watermark (`W <= pg_snapshot_xmin(S)` fails).
+  - **Replaced server:** a different system identifier.
+- **What isn't:** a restore that copies the `sync_source_identity` row into a database that keeps the same name, OID and server, with a transaction counter already past the stored watermark. That looks exactly like the original. Rows restored with old `sync_xid` values below W would then be skipped silently. **Generation rotation is therefore mandatory, not optional.**
+- **After any restore, copy or point-in-time recovery of `v2_oltp`, in order:**
+  1. Keep application writers off until step 3 is done.
+  2. As the owner: `SELECT rotate_sync_source_generation('restored from <backup id> at <time>');`
+  3. Run a sync as usual. It must stop with `SourceIdentityChanged`, the state becomes `blocked`, and the attempt is recorded in `meta.sync_runs`. If it does *not* stop, the rotation didn't happen: stop and investigate.
+  4. As the operator: `python -m sync.v2_sync --as-admin --reinitialize`. This truncates `raw.*` and reloads everything from the restored source in one transaction.
+  5. Resume normal runs (least-privilege login).
+- **Rebuilding with `scripts/v2/reset_v2.sh`** recreates both databases. It gets a new generation, an empty target and a freshly provisioned login automatically.
+- **A blocked target never resumes on its own.** Every run is refused until step 4, even if the original source comes back.

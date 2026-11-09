@@ -99,7 +99,7 @@ docker compose up -d --wait postgres    # Postgres only, without Airflow
 - V2 migrations accept only `v2_*` databases.
 - `scripts/fingerprint_protected_dbs.sh` prints a read-only fingerprint of the protected databases, to compare before and after any work.
 - V2 payment state changes only through `record_payment_event()` (migration `V005`), and refunds only through `request_refund()` / `complete_refund()` (migration `V006`).
-- The V2 sync (`python -m sync.v2_sync`, `v2_oltp` → `v2_analytics`) uses a transaction-ID watermark rather than timestamps. It refuses to continue when the source identity changes (rebuild or restore) until an explicit `--reinitialize`. See `docs/v2/PHASE1_DESIGN.md`, Step 6. The application role `v2_payment_app` can read but cannot write payment tables directly. See `docs/v2/PHASE1_DESIGN.md`.
+- The V2 sync (`python -m sync.v2_sync`, `v2_oltp` → `v2_analytics`) uses a transaction-ID watermark rather than timestamps. It refuses to continue when the source identity changes (rebuild or restore) until an explicit `--reinitialize`. It runs as the least-privilege login `v2_sync_login` (read-only on `v2_oltp`, no deletes on `v2_analytics`), and refuses a superuser unless `--as-admin` is given for operator procedures. **After any restore of `v2_oltp`, rotating the source generation is mandatory**; see the runbook in `docs/v2/PHASE1_DESIGN.md` (Step 6 hardening). The application role `v2_payment_app` can read but cannot write payment tables directly. See `docs/v2/PHASE1_DESIGN.md`.
 
 ## How the sync works
 

@@ -35,6 +35,8 @@ psql_in "$OLTP_DB" < sql/demo/seed_demo.sql
 "$PYTHON" -m tools.migrate --target oltp --db "$OLTP_DB"
 "$PYTHON" -m tools.migrate --target analytics --db "$ANALYTICS_DB"
 
+./scripts/v2/provision_sync_login.sh
+
 echo "Migration status:"
 "$PYTHON" -m tools.migrate --target oltp --db "$OLTP_DB" --status
 "$PYTHON" -m tools.migrate --target analytics --db "$ANALYTICS_DB" --status
