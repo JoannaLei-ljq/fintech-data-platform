@@ -577,3 +577,15 @@ Any failure, at any point before the commit, leaves all three published marts an
 **Limitations:**
 - **Coupling:** the DAG calls the CLIs inside the Airflow image (LocalExecutor). The dbt `run_results.json` that `publish` and `report` read relies on all tasks running in the same container. If it doesn't exist, publish is refused, which is safe.
 - **Credentials:** dbt, reconciliation and publish use the owner's credentials. Reconciliation reads in read-only sessions, and writes only its validation row.
+
+### Local security limitations (documented, not production-hardened)
+- **Airflow credentials.** `docker-compose.yml` passes the whole `.env` to every Airflow container (`env_file: .env`), and the project folder that contains `.env` is mounted at `/opt/project`. Every task, including `v2_sync`, can therefore read the database owner's credentials.
+  - The sync's least privilege is enforced by **code**: `SyncCredentials.from_env()` uses `V2_SYNC_USER`, and the engine refuses a superuser.
+  - It is **not** enforced by isolating the environment. Real isolation needs per-task secrets (an Airflow connection or secrets backend), no mounted `.env`, and separate images or workers.
+- **Owner-run components.** dbt, reconciliation and publication run as the database owner (a superuser locally).
+  - Reconciliation reads in read-only sessions and writes only `meta.mart_validations`.
+  - Publication writes only `marts.*` and `meta.mart_publications`.
+  - A dedicated least-privilege dbt/publisher role is future work.
+- **Database authentication.** The Docker PostgreSQL trusts connections from inside the container (`pg_hba`: local and loopback `trust`). Connections from the host need a password.
+- **Protected databases.** `PUBLIC` keeps PostgreSQL's default `CONNECT` on every database, so any role can connect to `fintech_*` and read catalogs, but not table data. Closing that needs a change to protected or server configuration, which is a separate decision.
+- **The shared MVP guard** (`tools/db_guard.py`, `SYNC_PREFIXES = ("demo_", "v2_")`) is deliberately left unchanged. The V2 sync has its own `v2_`-only guard, and the MVP sync would fail against `v2_analytics` anyway (different raw schema, no `meta.sync_checkpoints`).

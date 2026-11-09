@@ -70,15 +70,25 @@ candidate_matches_published() {
        UNION ALL SELECT NOT EXISTS (SELECT * FROM marts_candidate.fct_merchant_performance EXCEPT ALL SELECT * FROM marts.fct_merchant_performance)
           AND NOT EXISTS (SELECT * FROM marts.fct_merchant_performance EXCEPT ALL SELECT * FROM marts_candidate.fct_merchant_performance)) x"
 }
+task_events() {  # task_events <run_id> <task_id>: plain-text lines of an Airflow 3 JSON task log
+  local f; f=$(find "airflow/logs/dag_id=payments_v2_pipeline/run_id=$1/task_id=$2" -name '*.log' 2>/dev/null | head -1)
+  [[ -n "$f" ]] && jq -r 'select(.event != null) | .event' "$f" 2>/dev/null
+}
+reconcile_summary() {  # "<checks> <failed>" from the reconcile task's RECONCILE line
+  task_events "$(run_id)" reconcile | sed -n 's/^RECONCILE //p' | tail -1 | jq -r '"\(.checks) \(.failed)"'
+}
 pipeline_ok() {  # pipeline_ok <label>
   check "$1 run state" "$RUN_STATE" "success"
   check "$1 task order" "$(task_order)" "v2_sync dbt_build reconcile publish report"
   check "$1 tasks ran sequentially" "$(ordered_in_time)" "sequential"
+  check "$1 reconciliation ran all checks, none failed" "$(reconcile_summary)" "22 0"
   check "$1 published by this run" "$(publication | cut -d' ' -f2)" "$(run_id)"
   check "$1 published marts = validated candidate" "$(candidate_matches_published)" "t"
 }
 
-echo "### V2 acceptance run $(date -u +%FT%TZ) on $(git branch --show-current) @ $(git rev-parse --short HEAD)"
+DIRTY=$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')
+echo "### V2 acceptance run $(date -u +%FT%TZ) on $(git branch --show-current) @ $(git rev-parse HEAD)"
+echo "### Working tree: $([[ $DIRTY == 0 ]] && echo "clean (results are from the committed code)" || echo "$DIRTY modified tracked files: results are NOT from a committed state")"
 curl -sf http://127.0.0.1:8080/api/v2/monitor/health >/dev/null || { echo "Airflow is not running: docker compose up -d"; exit 1; }
 echo "### Airflow DAGs:"; docker compose exec -T airflow-scheduler airflow dags list -o plain 2>/dev/null | grep -E "payments_v2|fintech_demo" | awk '{print "  " $1}'
 PROTECTED_BEFORE=$(./scripts/fingerprint_protected_dbs.sh | md5sum | cut -c1-12)
@@ -179,6 +189,7 @@ run_dag reconcile
 check "E3 run state (reconciliation failure injected)" "$RUN_STATE" "failed"
 check "E3 task states" "$(task_state v2_sync) $(task_state dbt_build) $(task_state reconcile) $(task_state publish) $(task_state report)" \
   "success success failed upstream_failed upstream_failed"
+check "E3 reconciliation reported the failure" "$(reconcile_summary)" "23 1"
 check "E3 failed validation recorded for this run" "$(q "SELECT passed || ' ' || pipeline_run_id FROM meta.mart_validations ORDER BY validation_id DESC LIMIT 1")" "false $(run_id)"
 check "E3 published marts unchanged" "$(digest)" "$DIGEST_BEFORE"
 check "E3 publication unchanged" "$(publication)" "$PUB_BEFORE"

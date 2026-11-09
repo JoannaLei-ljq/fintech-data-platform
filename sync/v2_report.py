@@ -19,6 +19,11 @@ from dotenv import load_dotenv
 from sync.v2_reconcile import _connect
 
 
+def fmt_rate(rate) -> str:
+    """'-' only when there is no rate (zero denominator); a 0.00 rate prints as 0.00."""
+    return "-" if rate is None else str(rate)
+
+
 def major(amount_minor, minor_units) -> str:
     return f"{Decimal(int(amount_minor)).scaleb(-int(minor_units)):.{int(minor_units)}f}"
 
@@ -76,8 +81,8 @@ def kpi_summary(conn) -> None:
     print(f"  {'date':10s} {'cur':3s} {'created':>7s} {'cohort_cap':>11s} {'cohort%':>7s} {'captured':>11s} "
           f"{'outcome%':>8s} {'refunds':>10s} {'net':>11s}")
     for (d, cur, mu, created, c_amt, c_rate, _cap, cap_amt, _failed, o_rate, _rc, ref_amt, net, estimated) in rows:
-        print(f"  {d}{'*' if estimated else ' '}{cur:3s} {created:7d} {major(c_amt, mu):>11s} {str(c_rate or '-'):>7s} {major(cap_amt, mu):>11s} "
-              f"{str(o_rate or '-'):>8s} {major(ref_amt, mu):>10s} {major(net, mu):>11s}")
+        print(f"  {d}{'*' if estimated else ' '}{cur:3s} {created:7d} {major(c_amt, mu):>11s} {fmt_rate(c_rate):>7s} {major(cap_amt, mu):>11s} "
+              f"{fmt_rate(o_rate):>8s} {major(ref_amt, mu):>10s} {major(net, mu):>11s}")
     if any(r[-1] for r in rows):
         print("  * some captures, failures or refunds on this date carry synthetic timestamps from the MVP migration "
               "(upper bounds, not verified processor times)")
