@@ -1,0 +1,83 @@
+### V2 release fixes (P1 publication, P2 independent reconciliation, P3 provenance, low-priority) — final verification
+### 2026-11-09T21:30:45Z, branch v2-analytics-orchestration @ 09c08f531a7d9f294dd7ffeac0ca39651694681b, working tree clean
+
+### 1. pytest (tests/v2)
+======================= 313 passed in 298.74s (0:04:58) ========================
+  test_v2_publish: 14 passed, 0 failed
+  test_kpi_reference: 7 passed, 0 failed
+  test_v2_reconcile: 17 passed, 0 failed
+  test_provenance: 5 passed, 0 failed
+  test_v2_report: 2 passed, 0 failed
+
+### 2. V2 dbt build (dbt/v2, target v2, v2_analytics seed state)
+Finished running 2 project hooks, 3 table models, 84 data tests, 7 unit tests, 10 view models in 0 hours 0 minutes and 2.26 seconds (2.26s).
+Completed successfully
+Done. PASS=106 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=106
+
+### 3. End-to-end acceptance through Airflow (full log: docs/evidence/acceptance_v2_20261109T212452Z.log)
+### V2 acceptance run 2026-11-09T21:24:52Z on v2-analytics-orchestration @ 09c08f531a7d9f294dd7ffeac0ca39651694681b
+### Working tree: clean (results are from the committed code)
+### Summary: 112 passed, 0 failed
+  real DAG runs: 12
+
+### 4. Publications and validations recorded by that acceptance run
+ validation_id |              pipeline_run_id              | sync_run_id | passed | checks | failed | fingerprint  
+---------------+-------------------------------------------+-------------+--------+--------+--------+--------------
+             1 | manual__20261109T212458Z                  |           1 | t      |     22 |      0 | c7afb6686f9f
+             2 | manual__20261109T212518Z                  |           2 | t      |     22 |      0 | 72ce89f7f6d4
+             3 | manual__20261109T212538Z                  |           3 | t      |     22 |      0 | 2c049de57858
+             4 | manual__20261109T212601Z                  |           4 | t      |     22 |      0 | 582d6954cb2b
+             5 | manual__20261109T212618Z                  |           5 | t      |     22 |      0 | 5ca82f92e7d9
+             6 | manual__20261109T212639Z                  |           6 | t      |     22 |      0 | 96017cfa55fb
+             7 | manual__20261109T212733Z_inject_reconcile |           9 | f      |     23 |      1 | 7fe0895ab74c
+             8 | manual__20261109T212754Z                  |          10 | t      |     22 |      0 | afc056595d13
+             9 | manual__20261109T212816Z                  |          11 | t      |     22 |      0 | 4f9fa8f4d933
+            10 | manual__20261109T212838Z                  |          12 | t      |     22 |      0 | b13882823f47
+(10 rows)
+
+ publication_id |     pipeline_run_id      | sync_run_id | validation_id | previous_publication_id |                                 row_counts                                  
+----------------+--------------------------+-------------+---------------+-------------------------+-----------------------------------------------------------------------------
+              1 | manual__20261109T212458Z |           1 |             1 |                         | {"fct_payments": 4, "fct_daily_payments": 1, "fct_merchant_performance": 2}
+              2 | manual__20261109T212518Z |           2 |             2 |                       1 | {"fct_payments": 4, "fct_daily_payments": 1, "fct_merchant_performance": 2}
+              3 | manual__20261109T212538Z |           3 |             3 |                       2 | {"fct_payments": 5, "fct_daily_payments": 3, "fct_merchant_performance": 4}
+              4 | manual__20261109T212601Z |           4 |             4 |                       3 | {"fct_payments": 5, "fct_daily_payments": 4, "fct_merchant_performance": 5}
+              5 | manual__20261109T212618Z |           5 |             5 |                       4 | {"fct_payments": 5, "fct_daily_payments": 4, "fct_merchant_performance": 5}
+              6 | manual__20261109T212639Z |           6 |             6 |                       5 | {"fct_payments": 5, "fct_daily_payments": 4, "fct_merchant_performance": 5}
+              7 | manual__20261109T212754Z |          10 |             8 |                       6 | {"fct_payments": 5, "fct_daily_payments": 4, "fct_merchant_performance": 5}
+              8 | manual__20261109T212816Z |          11 |             9 |                       7 | {"fct_payments": 6, "fct_daily_payments": 5, "fct_merchant_performance": 6}
+              9 | manual__20261109T212838Z |          12 |            10 |                       8 | {"fct_payments": 7, "fct_daily_payments": 5, "fct_merchant_performance": 7}
+(9 rows)
+
+ publication_id |     pipeline_run_id      |          dbt_invocation_id           | sync_run_id | validation_id |                                 row_counts                                  |         published_at          
+----------------+--------------------------+--------------------------------------+-------------+---------------+-----------------------------------------------------------------------------+-------------------------------
+              9 | manual__20261109T212838Z | 358cf2ce-f762-44b7-83b0-771d13a0c193 |          12 |            10 | {"fct_payments": 7, "fct_daily_payments": 5, "fct_merchant_performance": 7} | 2026-11-09 21:28:51.494275+00
+(1 row)
+
+    date    | created | cohort_cap | cohort_pct | captured | outcome_pct | refunds |  net  | est 
+------------+---------+------------+------------+----------+-------------+---------+-------+-----
+ 2026-10-15 |       4 |      17000 |      75.00 |    17000 |       75.00 |    3000 | 14000 | t
+ 2026-11-02 |       1 |       4200 |     100.00 |        0 |             |       0 |     0 | f
+ 2026-11-03 |       0 |          0 |            |     4200 |      100.00 |       0 |  4200 | f
+ 2026-11-04 |       2 |       2700 |     100.00 |     2700 |      100.00 |       0 |  2700 | f
+ 2026-11-09 |       0 |          0 |            |        0 |             |    1700 | -1700 | f
+(5 rows)
+
+ merchant_id | report_date_utc | captured_amount_minor | succeeded_refund_amount_minor | refunded_of_captured_amount_minor | refund_rate_pct | has_estimated_dates 
+-------------+-----------------+-----------------------+-------------------------------+-----------------------------------+-----------------+---------------------
+         101 | 2026-10-15      |                  7000 |                             0 |                                 0 |            0.00 | t
+         101 | 2026-11-04      |                  1800 |                             0 |                                 0 |            0.00 | f
+         102 | 2026-10-15      |                 10000 |                          3000 |                              3000 |           30.00 | t
+         102 | 2026-11-02      |                     0 |                             0 |                                 0 |                 | f
+         102 | 2026-11-03      |                  4200 |                             0 |                              1700 |           40.48 | f
+         102 | 2026-11-04      |                   900 |                             0 |                                 0 |            0.00 | f
+         102 | 2026-11-09      |                     0 |                          1700 |                                 0 |                 | f
+(7 rows)
+
+
+### 5. MVP regression (demo_* only)
+### Acceptance run 2026-11-09T21:29:02Z
+### Versions: Airflow 3.3.2, dbt-core 1.12.5, PostgreSQL 16.15
+### Summary: 27 passed, 0 failed
+
+### 6. Protected databases: fingerprint before Step 0 vs final
+IDENTICAL (row count + md5 for 9 tables in fintech_oltp / fintech_analytics)
