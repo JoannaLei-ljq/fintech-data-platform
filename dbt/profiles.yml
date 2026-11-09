@@ -12,3 +12,20 @@ fintech:
       dbname: "{{ env_var('DBT_DBNAME', 'demo_analytics') }}"
       schema: staging
       threads: 4
+
+# V2 analytics project (dbt/v2). Its only target is v2. The database defaults to v2_analytics;
+# DBT_V2_DBNAME may point it at a disposable v2_test_* database, and any name that does not
+# start with "v2_" is replaced by a non-existent database, so dbt cannot connect (or create
+# schemas) anywhere else.
+fintech_v2:
+  target: v2
+  outputs:
+    v2:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5434') | as_number }}"
+      user: "{{ env_var('POSTGRES_USER') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('DBT_V2_DBNAME', 'v2_analytics') if env_var('DBT_V2_DBNAME', 'v2_analytics').startswith('v2_') else 'refused_non_v2_database' }}"
+      schema: staging
+      threads: 4

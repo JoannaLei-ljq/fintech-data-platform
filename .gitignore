@@ -14,6 +14,10 @@ dbt/target/
 dbt/logs/
 dbt/dbt_packages/
 dbt/.user.yml
+dbt/v2/target/
+dbt/v2/logs/
+dbt/v2/dbt_packages/
+dbt/v2/.user.yml
 
 # Runtime logs (the curated evidence logs stay tracked)
 airflow/logs/

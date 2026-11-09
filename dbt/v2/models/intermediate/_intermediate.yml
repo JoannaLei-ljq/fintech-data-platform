@@ -1,0 +1,110 @@
+version: 2
+
+models:
+  - name: int_payment_state_from_events
+    description: >
+      Payment state derived from events ordered by (transaction_id, event_sequence) only.
+      Malformed histories are flagged (has_conflicting_event_ids, has_duplicate_sequences,
+      is_contiguous, is_valid_lifecycle), never repaired.
+    columns:
+      - name: transaction_id
+        data_tests: [unique, not_null]
+
+  - name: int_payment_event_issues
+    description: One row per detected event-history or reconciliation problem; expected empty.
+
+  - name: int_refund_totals
+    description: One row per payment with refunds (exact minor units), aggregated before any join.
+    columns:
+      - name: transaction_id
+        description: Unique; a second row would mean refunds in two currencies for one payment.
+        data_tests: [unique, not_null]
+
+  - name: int_refund_completions
+    description: One row per succeeded refund, dated by succeeded_at.
+    columns:
+      - name: refund_id
+        data_tests: [unique, not_null]
+      - name: succeeded_date_utc
+        data_tests: [not_null]
+
+unit_tests:
+  - name: ut_event_state_ignores_arrival_order_and_exact_duplicates
+    description: >
+      Shuffled rows, a re-delivered duplicate and received_at/sync_run_id that contradict the
+      business order give the same state as a clean stream (order comes from event_sequence).
+    model: int_payment_state_from_events
+    given:
+      - input: ref('stg_payment_events')
+        rows:
+          - {event_id: "00000000-0000-0000-0000-000000000003", transaction_id: 1, event_sequence: 3, lifecycle_status: captured,   amount_minor: 500, currency: USD, event_source: processor, occurred_at: "2026-11-02 10:02:00+00", received_at: "2026-11-02 09:00:00+00", sync_run_id: 1}
+          - {event_id: "00000000-0000-0000-0000-000000000001", transaction_id: 1, event_sequence: 1, lifecycle_status: created,    amount_minor: 500, currency: USD, event_source: api,       occurred_at: "2026-11-02 10:00:00+00", received_at: "2026-11-02 11:00:00+00", sync_run_id: 3}
+          - {event_id: "00000000-0000-0000-0000-000000000002", transaction_id: 1, event_sequence: 2, lifecycle_status: authorized, amount_minor: 500, currency: USD, event_source: processor, occurred_at: "2026-11-02 10:01:00+00", received_at: "2026-11-02 10:30:00+00", sync_run_id: 2}
+          - {event_id: "00000000-0000-0000-0000-000000000002", transaction_id: 1, event_sequence: 2, lifecycle_status: authorized, amount_minor: 500, currency: USD, event_source: processor, occurred_at: "2026-11-02 10:01:00+00", received_at: "2026-11-02 10:30:00+00", sync_run_id: 4}
+    expect:
+      rows:
+        - {transaction_id: 1, derived_status: captured, derived_last_sequence: 3, event_count: 3, lifecycle_path: "created,authorized,captured", has_conflicting_event_ids: false, has_duplicate_sequences: false, is_contiguous: true, is_valid_lifecycle: true}
+
+  - name: ut_event_state_flags_malformed_histories
+    description: Gaps, illegal transitions, transitions after a terminal state, conflicting event ids and duplicate sequences are flagged, not corrected.
+    model: int_payment_state_from_events
+    given:
+      - input: ref('stg_payment_events')
+        rows:
+          # 10: sequence gap (1, 3)
+          - {event_id: "00000000-0000-0000-0000-000000000101", transaction_id: 10, event_sequence: 1, lifecycle_status: created,    event_source: api}
+          - {event_id: "00000000-0000-0000-0000-000000000103", transaction_id: 10, event_sequence: 3, lifecycle_status: authorized, event_source: api}
+          # 11: illegal transition created -> captured
+          - {event_id: "00000000-0000-0000-0000-000000000111", transaction_id: 11, event_sequence: 1, lifecycle_status: created,  event_source: api}
+          - {event_id: "00000000-0000-0000-0000-000000000112", transaction_id: 11, event_sequence: 2, lifecycle_status: captured, event_source: api}
+          # 12: a transition after the terminal failed state
+          - {event_id: "00000000-0000-0000-0000-000000000121", transaction_id: 12, event_sequence: 1, lifecycle_status: created,    event_source: api}
+          - {event_id: "00000000-0000-0000-0000-000000000122", transaction_id: 12, event_sequence: 2, lifecycle_status: failed,     event_source: api, failure_code: declined}
+          - {event_id: "00000000-0000-0000-0000-000000000123", transaction_id: 12, event_sequence: 3, lifecycle_status: authorized, event_source: api}
+          # 13: one event_id with two different payloads
+          - {event_id: "00000000-0000-0000-0000-000000000131", transaction_id: 13, event_sequence: 1, lifecycle_status: created, event_source: api}
+          - {event_id: "00000000-0000-0000-0000-000000000131", transaction_id: 13, event_sequence: 1, lifecycle_status: created, event_source: processor}
+          # 14: two different events claim sequence 2
+          - {event_id: "00000000-0000-0000-0000-000000000141", transaction_id: 14, event_sequence: 1, lifecycle_status: created,    event_source: api}
+          - {event_id: "00000000-0000-0000-0000-000000000142", transaction_id: 14, event_sequence: 2, lifecycle_status: authorized, event_source: api}
+          - {event_id: "00000000-0000-0000-0000-000000000143", transaction_id: 14, event_sequence: 2, lifecycle_status: failed,     event_source: api, failure_code: declined}
+    expect:
+      rows:
+        - {transaction_id: 10, is_contiguous: false, is_valid_lifecycle: true,  has_conflicting_event_ids: false, has_duplicate_sequences: false}
+        - {transaction_id: 11, is_contiguous: true,  is_valid_lifecycle: false, has_conflicting_event_ids: false, has_duplicate_sequences: false}
+        - {transaction_id: 12, is_contiguous: true,  is_valid_lifecycle: false, has_conflicting_event_ids: false, has_duplicate_sequences: false}
+        - {transaction_id: 13, is_contiguous: true,  is_valid_lifecycle: false, has_conflicting_event_ids: true,  has_duplicate_sequences: false}  # path created,created
+        - {transaction_id: 14, is_contiguous: false, is_valid_lifecycle: true,  has_conflicting_event_ids: false, has_duplicate_sequences: true}   # path created,authorized,failed is legal; the duplicate is what is wrong
+
+  - name: ut_event_state_marks_synthetic_capture_times
+    description: A capture that comes from the migration backfill is flagged, so its timestamp is not treated as observed.
+    model: int_payment_state_from_events
+    given:
+      - input: ref('stg_payment_events')
+        rows:
+          - {event_id: "00000000-0000-0000-0000-000000000201", transaction_id: 20, event_sequence: 1, lifecycle_status: created,    event_source: migration_backfill}
+          - {event_id: "00000000-0000-0000-0000-000000000202", transaction_id: 20, event_sequence: 2, lifecycle_status: authorized, event_source: migration_backfill}
+          - {event_id: "00000000-0000-0000-0000-000000000203", transaction_id: 20, event_sequence: 3, lifecycle_status: captured,   event_source: migration_backfill}
+          - {event_id: "00000000-0000-0000-0000-000000000211", transaction_id: 21, event_sequence: 1, lifecycle_status: created,    event_source: migration_backfill}
+          - {event_id: "00000000-0000-0000-0000-000000000212", transaction_id: 21, event_sequence: 2, lifecycle_status: authorized, event_source: processor}
+          - {event_id: "00000000-0000-0000-0000-000000000213", transaction_id: 21, event_sequence: 3, lifecycle_status: captured,   event_source: processor}
+    expect:
+      rows:
+        - {transaction_id: 20, derived_status: captured, has_backfilled_events: true, captured_by_backfill: true}
+        - {transaction_id: 21, derived_status: captured, has_backfilled_events: true, captured_by_backfill: false}
+
+  - name: ut_refund_totals_partial_pending_and_failed
+    description: Multiple partial refunds, a failed request and an open request aggregate to one exact row per payment.
+    model: int_refund_totals
+    given:
+      - input: ref('stg_refunds')
+        rows:
+          - {refund_id: 1, transaction_id: 100, currency: USD, amount_minor: 1000, status: succeeded, succeeded_at: "2026-11-06 12:00:00+00"}
+          - {refund_id: 2, transaction_id: 100, currency: USD, amount_minor: 1500, status: succeeded, succeeded_at: "2026-11-07 12:00:00+00"}
+          - {refund_id: 3, transaction_id: 100, currency: USD, amount_minor: 500,  status: failed}
+          - {refund_id: 4, transaction_id: 100, currency: USD, amount_minor: 700,  status: requested}
+          - {refund_id: 5, transaction_id: 200, currency: JPY, amount_minor: 300,  status: failed}
+    expect:
+      rows:
+        - {transaction_id: 100, refund_request_count: 4, succeeded_refund_count: 2, failed_refund_count: 1, pending_refund_count: 1, requested_refund_amount_minor: 3700, succeeded_refund_amount_minor: 2500, failed_refund_amount_minor: 500, pending_refund_amount_minor: 700}
+        - {transaction_id: 200, refund_request_count: 1, succeeded_refund_count: 0, failed_refund_count: 1, pending_refund_count: 0, requested_refund_amount_minor: 300, succeeded_refund_amount_minor: 0, failed_refund_amount_minor: 300, pending_refund_amount_minor: 0}

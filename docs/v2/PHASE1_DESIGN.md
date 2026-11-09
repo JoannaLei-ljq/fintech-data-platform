@@ -1,6 +1,6 @@
 # V2 Phase 1: approved design and implementation notes
 
-Status: Steps 0–6 approved and implemented on branch `v2-phase1`. Steps 7–8 still need approval.
+Status: Steps 0–6 implemented on `v2-phase1` (pushed). Steps 7–8 implemented on `v2-analytics-orchestration` (local).
 The MVP is frozen at tag `v0.1.0-mvp`.
 
 ## Isolation and safety
@@ -351,3 +351,89 @@ Reinitialization truncates `raw.*`, so it's an **operator procedure** run with t
   5. Resume normal runs (least-privilege login).
 - **Rebuilding with `scripts/v2/reset_v2.sh`** recreates both databases. It gets a new generation, an empty target and a freshly provisioned login automatically.
 - **A blocked target never resumes on its own.** Every run is refused until step 4, even if the original source comes back.
+
+### Step 7: dbt analytics and data quality (`dbt/v2`)
+
+**Isolation.**
+- **Why a separate dbt project:** V2 is its own project in `dbt/v2/` (`fintech_v2`) rather than a folder in the MVP project. dbt requires model names to be unique within a project, and V2 reuses the MVP's names (`stg_users`, `fct_daily_payments`, …). The MVP project's `model-paths: ["models"]` never sees `dbt/v2`, so MVP behavior is unchanged: its acceptance run still reports exactly 27 dbt nodes.
+- **Profile:** V2 uses its own profile, `fintech_v2`, in `dbt/profiles.yml`. Its only target is `v2`.
+  - The database is `v2_analytics`, or `DBT_V2_DBNAME` for a disposable `v2_test_*` database.
+  - Any name that doesn't start with `v2_` becomes `refused_non_v2_database`, so dbt can't connect anywhere else. This was tested with `postgres`, `demo_analytics` and `fintech_analytics`.
+  - An `on-run-start` guard (`assert_v2_target`) fails loudly as a second check.
+- **dbt's connection:** dbt runs as the database owner, like the MVP project. Only the sync runs least-privilege.
+
+**Lineage.**
+```
+raw.currencies ─────── stg_currencies ─────────────────────────────────────────┐
+raw.users ──────────── stg_users                                                │
+raw.merchants ──────── stg_merchants ──────────────────────────────┐            │
+raw.transactions ───── stg_transactions ──┬─ int_payment_event_issues (expect 0) │
+raw.payment_events ─── stg_payment_events ┴─ int_payment_state_from_events ─┐    │
+raw.refunds ────────── stg_refunds ─┬─ int_refund_totals ───────────────────┴─ fct_payments ─┬─ fct_daily_payments
+                                    └─ int_refund_completions ───────────────────────────────┴─ fct_merchant_performance
+```
+
+| Model | Grain | Purpose |
+|---|---|---|
+| `stg_*` (6 views) | 1:1 with `raw.*` | Explicit columns and renames; UTC dates (`*_date_utc`); `occurred_at` and `received_at` kept apart; `amount_minor` untouched |
+| `int_payment_state_from_events` | One row per payment with events | State derived from events ordered by `(transaction_id, event_sequence)` only. Exact duplicates collapse. Conflicts, duplicate sequences, gaps and illegal paths are **flagged** |
+| `int_payment_event_issues` | One row per problem | Turns those flags into rows, plus state, last-sequence and amount mismatches against `transactions`, payments without events, and events without payments. Expected to be empty |
+| `int_refund_totals` | One row per payment with refunds | Requested (all), pending, succeeded and failed counts and amounts, aggregated **before** any join |
+| `int_refund_completions` | One row per succeeded refund | Dated by `succeeded_at`, with the payment's merchant |
+| `fct_payments` | One row per payment | Original amount, status, event-derived status, lifecycle times, refund measures, remaining refundable amount, net captured amount, `captured_at_is_estimate` |
+| `fct_daily_payments` | `report_date_utc` + `currency` | Cohort metrics, outcome metrics, refunds, net |
+| `fct_merchant_performance` | `merchant_id` + `report_date_utc` + `currency` | Created, captured, failed, outcome success rate, refunds, net, refund rate |
+
+**KPI definitions.**
+- **Money:** every amount is integer minor units of the row's `currency`; `minor_units` comes from `currencies`. Currencies are never summed together, since there are no exchange rates. Every mart grain includes `currency`.
+
+| KPI | Definition | Date basis |
+|---|---|---|
+| Captured payment volume | `captured_amount_minor` = sum of `amount_minor` over payments whose status is `captured` | **Capture date** (`captured_at`, UTC). The cohort variant `cohort_captured_amount_minor` uses the **creation date** |
+| Payment success rate | `captured / (captured + failed)`; in-flight (`created`, `authorized`) excluded; NULL when the denominator is 0 | `outcome_success_rate_pct`: captures and failures on their **outcome dates**. `cohort_success_rate_pct`: payments **created** that day, by current status. The two bases are never mixed in one ratio |
+| Successful refund volume | `succeeded_refund_amount_minor` = sum over refunds with status `succeeded`. Requested (open) and failed refunds never count | **`succeeded_at` date** |
+| Net captured volume | `captured_amount_minor − succeeded_refund_amount_minor` | Both on event dates, so it's the day's money in minus money out and can be negative |
+| Refund rate (merchant) | `refunded_of_captured_amount_minor / captured_amount_minor` for payments captured that day, with refunds succeeded so far; NULL if nothing was captured | Cohort by **capture date**. It grows as later refunds succeed |
+| Remaining refundable (per payment) | `amount − pending − succeeded` for captured payments, else 0 | The same rule `request_refund()` enforces |
+
+**Comparison with the MVP.**
+- **The MVP's metrics** used the payment creation day for payment metrics and the refund *creation* day for refunds.
+- **On the demo scenario both V2 bases reproduce the MVP figures,** because every demo event happens on 2026-10-15:
+  - baseline: $150, 66.67% and $30 (`cohort_*` and `outcome_*`);
+  - once 3004 is captured on 2026-10-15: $170, 75% and $30.
+- **They diverge as soon as a payment is captured on a later day:**
+  - the cohort basis keeps it on the creation day;
+  - the outcome basis moves it to the capture day;
+  - refunds always move to the `succeeded_at` day.
+
+  Tested in `test_dbt_v2.py`.
+
+**Synthetic backfill.**
+- Capture, authorization and failure times for migrated MVP payments are upper bounds (`updated_at`), not observations.
+- `fct_payments.captured_at_is_estimate` and `fct_daily_payments.estimated_capture_time_count` expose this.
+- Use these timestamps only to date the MVP rows, never to measure processing latency.
+
+**Data quality.** 81 data tests and 6 unit tests run in every `dbt build`:
+- **Structure:** unique and not-null primary keys; relationships to users, merchants, currencies and payments; accepted statuses, event types and sources; `minor_units` in 0–4; positive amounts; unique `(transaction_id, event_sequence)`.
+- **Events** (`assert_no_payment_event_issues`): contiguity, legal paths (so nothing follows a terminal state), conflicting event IDs, derived state equal to `transactions.status` and `last_event_sequence`, amount and currency consistency.
+- **Refunds:** currency equals the payment's; requested + succeeded ≤ the payment amount, and refunds only on captured payments; terminal timestamps consistent with the status; refunded volume counts succeeded refunds only, in every layer.
+- **Analytics:** one row per payment; unique daily and merchant grains; payment counts, statuses and captured amounts reconcile, per currency, between staging, `fct_payments`, both daily bases and the merchant mart; staging stays 1:1 with raw.
+- **Unit tests:**
+  - shuffled, duplicated, out-of-order arrival;
+  - gaps, illegal transitions, transitions after a terminal state, conflicting IDs, duplicate sequences;
+  - synthetic capture times;
+  - partial, pending and failed refunds;
+  - no payment fan-out over refunds;
+  - created Monday / captured Tuesday;
+  - a refund requested Wednesday and succeeded Friday;
+  - zero denominators;
+  - USD and JPY kept apart.
+- **Negative integration tests** (`tests/v2/test_dbt_v2.py`): each corrupts `raw.*` in a disposable database (state mismatch, gap after a terminal state, over-refund, refund on a failed payment, currency mismatch, inconsistent refund timestamps, payment without events) and requires the matching dbt test to fail.
+- `assert_injected_failure` fails only with `--vars '{v2_inject_test_failure: true}'`, for failure demos.
+
+**Reconciliation across systems.** OLTP ↔ raw is checked outside dbt, because the two databases are separate. That check is in Step 8 (`sync/v2_reconcile.py`).
+
+**Limitations.**
+- **Full rebuilds:** marts are rebuilt in full on every run. That's fine at demo scale, but late events would need an incremental strategy with an event-date lookback later.
+- **Currency:** there's no FX, so no cross-currency totals.
+- **Partial captures** are not modeled. That's a Phase 1 rule enforced in OLTP.

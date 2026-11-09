@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Latest-state copies of the v2_oltp tables, loaded by sync/v2_sync.py (transaction-ID
+      watermark). payment_events is insert-only. _sync_xid / _run_id / _synced_at are sync
+      lineage columns and are never used to order business events.
+    schema: raw
+    tables:
+      - name: currencies
+      - name: users
+      - name: merchants
+      - name: transactions
+      - name: payment_events
+      - name: refunds

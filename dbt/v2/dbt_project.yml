@@ -1,0 +1,37 @@
+# V2 analytics project: v2_analytics.raw -> staging -> intermediate -> marts.
+#
+# A separate dbt project (not a folder in ../models) because dbt requires model names to be
+# unique within a project and V2 reuses the MVP's names (stg_users, fct_daily_payments, ...).
+# The MVP project in ../ never sees these files (its model-paths is ["models"]).
+# Run only with the fintech_v2 profile, whose single target is v2 (see ../profiles.yml):
+#   cd dbt/v2 && dbt build --profiles-dir ..
+name: fintech_v2
+version: "2.0.0"
+config-version: 2
+profile: fintech_v2
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+clean-targets: ["target", "dbt_packages"]
+
+# Refuse to run anywhere but a v2_* database (the profile already refuses to connect elsewhere).
+on-run-start:
+  - "{{ assert_v2_target() }}"
+
+vars:
+  # Demo/acceptance only: makes the singular test assert_injected_failure fail on purpose.
+  v2_inject_test_failure: false
+
+models:
+  fintech_v2:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table

@@ -1,0 +1,103 @@
+version: 2
+
+models:
+  - name: fct_payments
+    description: One row per payment. amount_minor is the original amount; refunds are reported beside it.
+    columns:
+      - name: transaction_id
+        data_tests: [unique, not_null]
+      - name: currency
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_currencies'), field: currency_code}}
+      - name: status_matches_events
+        data_tests:
+          - accepted_values: {arguments: {values: [true]}}
+      - name: remaining_refundable_amount_minor
+        data_tests:
+          - in_range: {arguments: {min_value: 0, max_value: 9223372036854775807}}
+
+  - name: fct_daily_payments
+    description: One row per (report_date_utc, currency). See the model header for the two date bases.
+    data_tests:
+      - unique_combination: {arguments: {combination: [report_date_utc, currency]}}
+    columns:
+      - name: report_id
+        data_tests: [unique, not_null]
+      - name: currency
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_currencies'), field: currency_code}}
+      - name: cohort_success_rate_pct
+        data_tests:
+          - in_range: {arguments: {min_value: 0, max_value: 100}}
+      - name: outcome_success_rate_pct
+        data_tests:
+          - in_range: {arguments: {min_value: 0, max_value: 100}}
+
+  - name: fct_merchant_performance
+    description: One row per (merchant_id, report_date_utc, currency).
+    data_tests:
+      - unique_combination: {arguments: {combination: [merchant_id, report_date_utc, currency]}}
+    columns:
+      - name: merchant_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_merchants'), field: merchant_id}}
+      - name: currency
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_currencies'), field: currency_code}}
+      - name: refund_rate_pct
+        data_tests:
+          - in_range: {arguments: {min_value: 0, max_value: 100}}
+
+unit_tests:
+  - name: ut_daily_dates_follow_each_metric_basis
+    description: >
+      Created Monday / captured Tuesday: the cohort counts it on Monday, captured volume on
+      Tuesday. A refund requested Wednesday and succeeded Friday counts on Friday. A day with
+      only in-flight payments has NULL rates (zero denominator). USD and JPY stay apart.
+      A synthetic (backfilled) capture time is counted as an estimate.
+    model: fct_daily_payments
+    given:
+      - input: ref('fct_payments')
+        rows:
+          - {transaction_id: 1, currency: USD, amount_minor: 4200, is_captured: true,  is_failed: false, is_in_flight: false, created_date_utc: "2026-11-02", captured_date_utc: "2026-11-03", captured_at_is_estimate: false}
+          - {transaction_id: 2, currency: USD, amount_minor: 1000, is_captured: false, is_failed: true,  is_in_flight: false, created_date_utc: "2026-11-02", failed_date_utc: "2026-11-02"}
+          - {transaction_id: 3, currency: USD, amount_minor: 900,  is_captured: false, is_failed: false, is_in_flight: true,  created_date_utc: "2026-11-05"}
+          - {transaction_id: 4, currency: JPY, amount_minor: 1500, is_captured: true,  is_failed: false, is_in_flight: false, created_date_utc: "2026-11-02", captured_date_utc: "2026-11-02", captured_at_is_estimate: true}
+      - input: ref('int_refund_completions')
+        rows:
+          - {refund_id: 9, transaction_id: 1, currency: USD, amount_minor: 700, requested_date_utc: "2026-11-04", succeeded_date_utc: "2026-11-06"}
+      - input: ref('stg_currencies')
+        rows:
+          - {currency_code: USD, minor_units: 2}
+          - {currency_code: JPY, minor_units: 0}
+    expect:
+      rows:
+        - {report_id: "2026-11-02|JPY", created_payment_count: 1, cohort_captured_amount_minor: 1500, captured_count: 1, captured_amount_minor: 1500, estimated_capture_time_count: 1, failed_count: 0, cohort_success_rate_pct: 100.00, outcome_success_rate_pct: 100.00, succeeded_refund_amount_minor: 0, net_captured_amount_minor: 1500}
+        - {report_id: "2026-11-02|USD", created_payment_count: 2, cohort_captured_amount_minor: 4200, captured_count: 0, captured_amount_minor: 0, estimated_capture_time_count: 0, failed_count: 1, cohort_success_rate_pct: 50.00, outcome_success_rate_pct: 0.00, succeeded_refund_amount_minor: 0, net_captured_amount_minor: 0}
+        - {report_id: "2026-11-03|USD", created_payment_count: 0, cohort_captured_amount_minor: 0, captured_count: 1, captured_amount_minor: 4200, estimated_capture_time_count: 0, failed_count: 0, cohort_success_rate_pct: null, outcome_success_rate_pct: 100.00, succeeded_refund_amount_minor: 0, net_captured_amount_minor: 4200}
+        - {report_id: "2026-11-05|USD", created_payment_count: 1, cohort_captured_amount_minor: 0, captured_count: 0, captured_amount_minor: 0, estimated_capture_time_count: 0, failed_count: 0, cohort_success_rate_pct: null, outcome_success_rate_pct: null, succeeded_refund_amount_minor: 0, net_captured_amount_minor: 0}
+        - {report_id: "2026-11-06|USD", created_payment_count: 0, cohort_captured_amount_minor: 0, captured_count: 0, captured_amount_minor: 0, estimated_capture_time_count: 0, failed_count: 0, cohort_success_rate_pct: null, outcome_success_rate_pct: null, succeeded_refund_amount_minor: 700, net_captured_amount_minor: -700}
+
+  - name: ut_payments_do_not_fan_out_over_refunds
+    description: A payment with several refunds stays one row with its original amount; failed refunds are not refunded money.
+    model: fct_payments
+    given:
+      - input: ref('stg_transactions')
+        rows:
+          - {transaction_id: 1, currency: USD, amount_minor: 10000, status: captured}
+          - {transaction_id: 2, currency: USD, amount_minor: 3000,  status: failed}
+      - input: ref('int_payment_state_from_events')
+        rows:
+          - {transaction_id: 1, derived_status: captured, captured_by_backfill: false, has_backfilled_events: false}
+          - {transaction_id: 2, derived_status: failed,   captured_by_backfill: false, has_backfilled_events: false}
+      - input: ref('int_refund_totals')
+        rows:
+          - {transaction_id: 1, currency: USD, refund_request_count: 4, pending_refund_count: 1, succeeded_refund_count: 2, failed_refund_count: 1, requested_refund_amount_minor: 3700, pending_refund_amount_minor: 700, succeeded_refund_amount_minor: 2500, failed_refund_amount_minor: 500}
+    expect:
+      rows:
+        - {transaction_id: 1, amount_minor: 10000, succeeded_refund_amount_minor: 2500, pending_refund_amount_minor: 700, failed_refund_amount_minor: 500, remaining_refundable_amount_minor: 6800, net_captured_amount_minor: 7500, status_matches_events: true, is_fully_refunded: false}
+        - {transaction_id: 2, amount_minor: 3000, succeeded_refund_amount_minor: 0, pending_refund_amount_minor: 0, failed_refund_amount_minor: 0, remaining_refundable_amount_minor: 0, net_captured_amount_minor: 0, status_matches_events: true, is_fully_refunded: false}

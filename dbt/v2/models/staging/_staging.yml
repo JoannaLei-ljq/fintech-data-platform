@@ -1,0 +1,103 @@
+version: 2
+
+models:
+  - name: stg_currencies
+    description: ISO 4217 currencies; minor_units is the number of decimals in amount_minor.
+    columns:
+      - name: currency_code
+        data_tests: [unique, not_null]
+      - name: minor_units
+        data_tests:
+          - not_null
+          - in_range: {arguments: {min_value: 0, max_value: 4}}
+
+  - name: stg_users
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: email
+        data_tests: [not_null]
+
+  - name: stg_merchants
+    columns:
+      - name: merchant_id
+        data_tests: [unique, not_null]
+
+  - name: stg_transactions
+    description: Current payment state (one row per payment).
+    columns:
+      - name: transaction_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_users'), field: user_id}}
+      - name: merchant_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_merchants'), field: merchant_id}}
+      - name: currency
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_currencies'), field: currency_code}}
+      - name: amount_minor
+        data_tests: [not_null, positive_value]
+      - name: status
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: [created, authorized, captured, failed]}}
+      - name: created_at
+        data_tests: [not_null]
+
+  - name: stg_payment_events
+    description: Append-only payment history; business order is (transaction_id, event_sequence).
+    data_tests:
+      - unique_combination: {arguments: {combination: [transaction_id, event_sequence]}}
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: transaction_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_transactions'), field: transaction_id}}
+      - name: event_sequence
+        data_tests: [not_null, positive_value]
+      - name: event_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [payment.created, payment.authorized, payment.captured, payment.failed]
+      - name: event_source
+        data_tests:
+          - accepted_values: {arguments: {values: [api, processor, migration_backfill]}}
+      - name: currency
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_currencies'), field: currency_code}}
+      - name: amount_minor
+        data_tests: [positive_value]
+      - name: occurred_at
+        data_tests: [not_null]
+      - name: received_at
+        data_tests: [not_null]
+
+  - name: stg_refunds
+    columns:
+      - name: refund_id
+        data_tests: [unique, not_null]
+      - name: idempotency_key
+        data_tests: [unique, not_null]
+      - name: transaction_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_transactions'), field: transaction_id}}
+      - name: currency
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_currencies'), field: currency_code}}
+      - name: amount_minor
+        data_tests: [not_null, positive_value]
+      - name: status
+        data_tests:
+          - accepted_values: {arguments: {values: [requested, succeeded, failed]}}
+      - name: requested_at
+        data_tests: [not_null]
