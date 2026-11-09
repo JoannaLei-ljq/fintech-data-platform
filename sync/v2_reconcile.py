@@ -14,6 +14,13 @@ Checks (any FAIL exits non-zero; WARN does not):
                      fct_merchant_performance; one row per payment; no event issues.
   source_vs_marts    the same financial totals straight from OLTP (skipped with WARN when rows
                      are pending for the next sync).
+  build_identity     the candidate marts were built (dbt build manifest) by the expected pipeline
+                     run, from the sync run that is still the latest one.
+
+By default the CANDIDATE marts (marts_candidate) are reconciled, before publication. With
+record=True / --record the outcome is stored in meta.mart_validations together with the
+candidate's content fingerprint and run identities; sync/v2_publish.py publishes only a
+candidate whose passing validation matches its current content.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from dataclasses import dataclass, field
 import psycopg
 from dotenv import load_dotenv
 
+from sync.v2_marts import CANDIDATE_SCHEMA, candidate_fingerprint, read_build_info
 from sync.v2_sync import TABLES, SyncCredentials
 from tools.db_guard import UnsafeDatabaseTarget
 
@@ -63,12 +71,24 @@ def _fingerprints(conn, relation: str, table, where: str = "", params=()) -> dic
     return dict(rows.fetchall())
 
 
-def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics") -> Report:
+def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics", *, marts_schema: str = CANDIDATE_SCHEMA,
+              pipeline_run_id: str | None = None, record: bool = False, inject_failure: bool = False) -> Report:
     report = Report()
     with _connect(oltp_db) as oltp, _connect(analytics_db) as wh:
-        state = wh.execute("SELECT status, watermark::text, last_snapshot::text, last_run_id FROM meta.sync_state "
+        def q_wh(query: str, params=()):  # mart queries are written against "marts."; point them at marts_schema
+            return wh.execute(query.replace("marts.fct_", f"{marts_schema}.fct_"), params)
+
+        build = read_build_info(wh) if marts_schema == CANDIDATE_SCHEMA else None
+        if marts_schema == CANDIDATE_SCHEMA:
+            current = wh.execute("SELECT last_run_id FROM meta.sync_state WHERE source_name = 'v2_oltp'").fetchone()
+            ok = (build is not None and current is not None and build.sync_run_id == current[0]
+                  and (pipeline_run_id is None or build.pipeline_run_id == pipeline_run_id))
+            report.check(ok, "build_identity",
+                         f"manifest={build} latest_sync_run={current[0] if current else None} "
+                         f"expected_pipeline_run={pipeline_run_id}")
+        state = q_wh("SELECT status, watermark::text, last_snapshot::text, last_run_id FROM meta.sync_state "
                            "WHERE source_name = 'v2_oltp'").fetchone()
-        last = wh.execute("SELECT run_id, status FROM meta.sync_runs WHERE status <> 'rejected' "
+        last = q_wh("SELECT run_id, status FROM meta.sync_runs WHERE status <> 'rejected' "
                           "ORDER BY run_id DESC LIMIT 1").fetchone()
         report.check(state is not None and state[0] == "active" and last is not None and last[1] == "succeeded",
                      "sync_state", f"state={state[0] if state else None} watermark={state[1] if state else None} "
@@ -92,7 +112,7 @@ def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics") -> R
                          f"{len(visible)} rows compared, {len(differing)} differ, {len(extra)} only in raw, "
                          f"{pending} pending next sync" + (f"; e.g. {(differing + extra)[:3]}" if differing or extra else ""))
 
-        raw_totals = dict((r[0], r[1:]) for r in wh.execute("""
+        raw_totals = dict((r[0], r[1:]) for r in q_wh("""
             SELECT currency, count(*), count(*) FILTER (WHERE status = 'captured'), count(*) FILTER (WHERE status = 'failed'),
                    coalesce(sum(amount_minor) FILTER (WHERE status = 'captured'), 0)
             FROM raw.transactions GROUP BY currency"""))
@@ -111,7 +131,7 @@ def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics") -> R
                                            FROM marts.fct_merchant_performance GROUP BY currency""",
         }
         for name, query in layers.items():
-            got = dict((r[0], r[1:]) for r in wh.execute(query))
+            got = dict((r[0], r[1:]) for r in q_wh(query))
             same = set(got) == set(raw_totals) and all(
                 (g[0] is None or g[0] == raw_totals[c][0]) and tuple(g[1:]) == tuple(raw_totals[c][1:])
                 for c, g in got.items())
@@ -119,7 +139,7 @@ def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics") -> R
                          "per currency (payments, captured, failed, captured_amount_minor) "
                          f"raw={_fmt(raw_totals)} mart={_fmt(got)}")
 
-        raw_refunds = dict((r[0], r[1:]) for r in wh.execute("""
+        raw_refunds = dict((r[0], r[1:]) for r in q_wh("""
             SELECT currency, count(*) FILTER (WHERE status = 'succeeded'),
                    coalesce(sum(amount_minor) FILTER (WHERE status = 'succeeded'), 0)
             FROM raw.refunds GROUP BY currency HAVING count(*) FILTER (WHERE status = 'succeeded') > 0"""))
@@ -132,16 +152,16 @@ def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics") -> R
                                         "FROM marts.fct_merchant_performance GROUP BY currency "
                                         "HAVING sum(succeeded_refund_count) > 0",
         }.items():
-            got = dict((r[0], r[1:]) for r in wh.execute(query))
+            got = dict((r[0], r[1:]) for r in q_wh(query))
             report.check(_norm(got) == _norm(raw_refunds), f"marts.refunds.{name}",
                          f"succeeded (count, amount_minor) raw={_fmt(raw_refunds)} mart={_fmt(got)}")
 
-        rows, distinct, raw_rows = wh.execute(
+        rows, distinct, raw_rows = q_wh(
             "SELECT count(*), count(DISTINCT transaction_id), (SELECT count(*) FROM raw.transactions) "
             "FROM marts.fct_payments").fetchone()
         report.check(rows == distinct == raw_rows, "marts.one_row_per_payment",
                      f"fct_payments {rows} rows, {distinct} distinct, raw {raw_rows}")
-        issues, mismatched = wh.execute(
+        issues, mismatched = q_wh(
             "SELECT (SELECT count(*) FROM intermediate.int_payment_event_issues), "
             "(SELECT count(*) FROM marts.fct_payments WHERE NOT status_matches_events)").fetchone()
         report.check(issues == 0 and mismatched == 0, "marts.event_order",
@@ -158,14 +178,35 @@ def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics") -> R
                 SELECT currency, count(*) FILTER (WHERE status = 'succeeded'),
                        coalesce(sum(amount_minor) FILTER (WHERE status = 'succeeded'), 0)
                 FROM refunds GROUP BY currency HAVING count(*) FILTER (WHERE status = 'succeeded') > 0"""))
-            mart = dict((r[0], r[1:]) for r in wh.execute(layers["fct_payments"]))
-            mart_refunds = dict((r[0], r[1:]) for r in wh.execute(
+            mart = dict((r[0], r[1:]) for r in q_wh(layers["fct_payments"]))
+            mart_refunds = dict((r[0], r[1:]) for r in q_wh(
                 "SELECT currency, sum(succeeded_refund_count), sum(succeeded_refund_amount_minor) FROM marts.fct_payments "
                 "GROUP BY currency HAVING sum(succeeded_refund_count) > 0"))
             report.check(_norm(src) == _norm(mart) and _norm(src_refunds) == _norm(mart_refunds), "source_vs_marts",
                          f"payments oltp={_fmt(src)} mart={_fmt(mart)}; succeeded refunds oltp={_fmt(src_refunds)} "
                          f"mart={_fmt(mart_refunds)}")
+
+        if inject_failure:
+            report.add("FAIL", "injected_failure", "failure injected on request (demo only)")
+        if record:
+            _record_validation(analytics_db, report, build, candidate_fingerprint(wh))
     return report
+
+
+def _record_validation(analytics_db: str, report: Report, build, fingerprint: str) -> None:
+    """Store the outcome for publication (separate, writable session; marts and raw are only read)."""
+    if build is None:
+        report.add("FAIL", "validation_record", "no candidate build manifest: nothing to record")
+        return
+    summary = [{"status": s, "check": c, "detail": d} for s, c, d in report.results]
+    with psycopg.connect(SyncCredentials.admin().conninfo(analytics_db), autocommit=True) as conn:
+        validation_id = conn.execute("""
+            INSERT INTO meta.mart_validations (pipeline_run_id, dbt_invocation_id, sync_run_id, candidate_fingerprint,
+                                               passed, checks, failed, summary)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING validation_id""",
+            (build.pipeline_run_id, build.dbt_invocation_id, build.sync_run_id, fingerprint, report.failed == 0,
+             len(report.results), report.failed, json.dumps(summary))).fetchone()[0]
+    print(f"validation {validation_id} recorded: passed={report.failed == 0} fingerprint={fingerprint}", flush=True)
 
 
 def _norm(d: dict) -> dict:
@@ -181,8 +222,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Reconcile v2_oltp, v2_analytics.raw and the V2 marts (read-only).")
     parser.add_argument("--oltp", default=os.getenv("V2_OLTP_DB", "v2_oltp"))
     parser.add_argument("--analytics", default=os.getenv("V2_ANALYTICS_DB", "v2_analytics"))
+    parser.add_argument("--marts-schema", default=CANDIDATE_SCHEMA, choices=[CANDIDATE_SCHEMA, "marts"],
+                        help="reconcile the candidate marts (default, before publication) or the published ones")
+    parser.add_argument("--pipeline-run-id", help="require the candidate to have been built by this pipeline run")
+    parser.add_argument("--record", action="store_true", help="store the outcome in meta.mart_validations")
+    parser.add_argument("--inject-failure", action="store_true", help="demo only: add a failing check")
     args = parser.parse_args()
-    report = reconcile(args.oltp, args.analytics)
+    report = reconcile(args.oltp, args.analytics, marts_schema=args.marts_schema,
+                       pipeline_run_id=args.pipeline_run_id, record=args.record, inject_failure=args.inject_failure)
     summary = {"checks": len(report.results), "failed": report.failed,
                "warnings": sum(1 for s, *_ in report.results if s == "WARN")}
     print("RECONCILE " + json.dumps(summary), flush=True)

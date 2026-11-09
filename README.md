@@ -43,7 +43,8 @@ v2_oltp (OLTP)                         v2_analytics                             
   - refunded volume counts **succeeded** refunds on their `succeeded_at` date;
   - currencies are never added together;
   - 81 data tests and 6 unit tests run in every build.
-- **Airflow `payments_v2_pipeline`:** sync → dbt build → reconciliation (OLTP ↔ raw ↔ marts) → report. It's manual by default, runs one at a time, and a failed run is safe to re-trigger.
+- **Airflow `payments_v2_pipeline`:** write → audit → publish. Sync → dbt build (`marts_candidate`) → reconciliation (OLTP ↔ raw ↔ candidate, recorded) → **publish** (one transaction into `marts`, only for the same validated run) → report. A failed sync, dbt build or reconciliation never changes the published marts. It's manual by default, runs one at a time, and a failed run is safe to re-trigger.
+- **Consumers** read `marts.*`. Use one REPEATABLE READ transaction when several queries must agree; `marts.current_publication` says which publication you see.
 
 ### Run V2 locally
 ```bash
@@ -62,7 +63,7 @@ That runs the full pipeline through Airflow. `sync` or `dbt` as an argument inje
 ```bash
 ./scripts/v2/run_acceptance_v2.sh
 ```
-That's the end-to-end acceptance (Scenarios A–F, 72 checks) through Airflow, writing `docs/evidence/acceptance_v2_*.log`.
+That's the end-to-end acceptance (Scenarios A–F) through Airflow, writing `docs/evidence/acceptance_v2_*.log`.
 
 ```bash
 .venv/bin/python -m pytest

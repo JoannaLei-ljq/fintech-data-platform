@@ -77,7 +77,7 @@ def build_ok(env) -> str:
 
 def daily(env, date: str, currency: str = "USD") -> dict:
     with connect(env["target"]) as c:
-        cur = c.execute("SELECT * FROM marts.fct_daily_payments WHERE report_date_utc = %s AND currency = %s",
+        cur = c.execute("SELECT * FROM marts_candidate.fct_daily_payments WHERE report_date_utc = %s AND currency = %s",
                         (date, currency))
         row = cur.fetchone()
         return dict(zip([d.name for d in cur.description], row)) if row else {}
@@ -155,9 +155,9 @@ def test_refunds_count_on_their_succeeded_date_and_only_when_succeeded(env):
     with connect(env["target"]) as c:
         row = c.execute("SELECT amount_minor, succeeded_refund_amount_minor, pending_refund_amount_minor, "
                         "failed_refund_amount_minor, remaining_refundable_amount_minor, net_captured_amount_minor "
-                        "FROM marts.fct_payments WHERE transaction_id = 6001").fetchone()
+                        "FROM marts_candidate.fct_payments WHERE transaction_id = 6001").fetchone()
         assert row == (4200, 1000, 700, 500, 2500, 3200)
-        assert c.execute("SELECT count(*) FROM marts.fct_payments").fetchone()[0] == 5   # no fan-out
+        assert c.execute("SELECT count(*) FROM marts_candidate.fct_payments").fetchone()[0] == 5   # no fan-out
 
 
 # --- negative tests: corrupted raw data is detected, not corrected -----------------------------

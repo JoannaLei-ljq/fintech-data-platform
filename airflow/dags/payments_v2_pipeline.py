@@ -1,22 +1,27 @@
-"""V2 pipeline: v2_oltp -> (sync) -> v2_analytics.raw -> (dbt) -> marts -> reconcile -> report.
+"""V2 pipeline (write -> audit -> publish):
+v2_oltp -> sync -> v2_analytics.raw -> dbt -> marts_candidate -> reconcile -> publish -> marts -> report.
 
-Orchestrates existing components only:
-  v2_sync    python -m sync.v2_sync      least-privilege login V2_SYNC_USER (from .env), never a superuser
-  dbt_build  dbt build in dbt/v2         profile fintech_v2, target v2, database v2_analytics
-  reconcile  python -m sync.v2_reconcile OLTP <-> raw <-> marts, read-only; fails the run on a mismatch
-  report     python -m sync.v2_report    sync metrics, dbt results, KPIs, duration
+Orchestrates existing components only. One identity, this DAG run's run_id, ties them together:
+  v2_sync    python -m sync.v2_sync       least-privilege login V2_SYNC_USER (from .env), never a superuser
+  dbt_build  dbt build in dbt/v2          builds marts_candidate; records the build manifest with run_id
+  reconcile  python -m sync.v2_reconcile  OLTP <-> raw <-> candidate marts; records the validation and
+                                          the candidate fingerprint for run_id; fails the run on a mismatch
+  publish    python -m sync.v2_publish    copies the candidate into marts in ONE transaction, only if the
+                                          dbt results, build manifest, validation and current candidate
+                                          all belong to run_id and the sync run has not moved on
+  report     python -m sync.v2_report     publication, sync metrics, dbt results, published KPIs, duration
 
-Each task runs only if the previous one succeeded, so a failed sync never reaches dbt and a
-failed dbt build or reconciliation never produces a "successful" report. max_active_runs=1 and
-max_active_tasks=1 keep runs from overlapping (the sync also takes an advisory lock).
-A failed run is safe to re-trigger: the sync resumes from its last committed checkpoint and
-dbt rebuilds the marts in full.
+Each task runs only if the previous one succeeded. A failed sync, dbt build or reconciliation
+never reaches publish, so the published marts and their publication record stay exactly as
+the last successful run left them. max_active_runs=1 and max_active_tasks=1 keep runs from
+overlapping; the sync and the publish also take advisory locks. A failed run is safe to
+re-trigger: the sync resumes from its last committed checkpoint and dbt rebuilds the candidate.
 
 Manual by default. Optional schedule: set V2_PIPELINE_SCHEDULE (a cron expression or preset,
 for example "@hourly") in .env and restart the Airflow services.
 
 Run conf (demo / acceptance only): {"inject_failure": "sync"} fails the sync just before its
-target commit; {"inject_failure": "dbt"} fails one dbt test on purpose.
+target commit; "dbt" fails one dbt test on purpose; "reconcile" adds a failing reconciliation check.
 """
 
 import os
@@ -50,8 +55,8 @@ with DAG(
         "inject_failure": Param(
             "",
             type="string",
-            enum=["", "sync", "dbt"],
-            description="Demo only: make the sync fail before commit, or fail one dbt test",
+            enum=["", "sync", "dbt", "reconcile"],
+            description="Demo only: fail the sync before commit, one dbt test, or the reconciliation",
         ),
     },
     tags=["fintech", "v2"],
@@ -71,7 +76,8 @@ with DAG(
         bash_command=(
             f"cd {PROJECT_DIR}/dbt/v2 && {DBT_BIN} --no-use-colors build --profiles-dir .. "
             f"--target-path {DBT_ARTIFACTS}/target --log-path {DBT_ARTIFACTS}/logs"
-            "{% if params.inject_failure == 'dbt' %} --vars '{v2_inject_test_failure: true}'{% endif %}"
+            " --vars '{v2_pipeline_run_id: \"{{ run_id }}\", "
+            "v2_inject_test_failure: {{ 'true' if params.inject_failure == 'dbt' else 'false' }}}'"
         ),
         env=V2_ENV,
         append_env=True,
@@ -79,7 +85,21 @@ with DAG(
 
     reconcile = BashOperator(
         task_id="reconcile",
-        bash_command=f"cd {PROJECT_DIR} && python -m sync.v2_reconcile",
+        bash_command=(
+            f"cd {PROJECT_DIR} && python -m sync.v2_reconcile --marts-schema marts_candidate "
+            "--pipeline-run-id '{{ run_id }}' --record"
+            "{% if params.inject_failure == 'reconcile' %} --inject-failure{% endif %}"
+        ),
+        env=V2_ENV,
+        append_env=True,
+    )
+
+    publish = BashOperator(
+        task_id="publish",
+        bash_command=(
+            f"cd {PROJECT_DIR} && python -m sync.v2_publish --pipeline-run-id '{{{{ run_id }}}}' "
+            f"--run-results {DBT_ARTIFACTS}/target/run_results.json"
+        ),
         env=V2_ENV,
         append_env=True,
     )
@@ -95,4 +115,4 @@ with DAG(
         append_env=True,
     )
 
-    v2_sync >> dbt_build >> reconcile >> report
+    v2_sync >> dbt_build >> reconcile >> publish >> report

@@ -380,7 +380,7 @@ raw.refunds ────────── stg_refunds ─┬─ int_refund_tota
 | `int_payment_event_issues` | One row per problem | Turns those flags into rows, plus state, last-sequence and amount mismatches against `transactions`, payments without events, and events without payments. Expected to be empty |
 | `int_refund_totals` | One row per payment with refunds | Requested (all), pending, succeeded and failed counts and amounts, aggregated **before** any join |
 | `int_refund_completions` | One row per succeeded refund | Dated by `succeeded_at`, with the payment's merchant |
-| `fct_payments` | One row per payment | Original amount, status, event-derived status, lifecycle times, refund measures, remaining refundable amount, net captured amount, `captured_at_is_estimate` |
+| `fct_payments` (built in `marts_candidate`, published to `marts`) | One row per payment | Original amount, status, event-derived status, lifecycle times, refund measures, remaining refundable amount, net captured amount, `captured_at_is_estimate` |
 | `fct_daily_payments` | `report_date_utc` + `currency` | Cohort metrics, outcome metrics, refunds, net |
 | `fct_merchant_performance` | `merchant_id` + `report_date_utc` + `currency` | Created, captured, failed, outcome success rate, refunds, net, refund rate |
 
@@ -440,17 +440,18 @@ raw.refunds ────────── stg_refunds ─┬─ int_refund_tota
 
 ### Step 8: Airflow orchestration and end-to-end acceptance
 
-**DAG `payments_v2_pipeline`** (`airflow/dags/payments_v2_pipeline.py`):
+**DAG `payments_v2_pipeline`** (`airflow/dags/payments_v2_pipeline.py`). This is write → audit → publish, added as release fix 1:
 ```
-v2_sync ──▶ dbt_build ──▶ reconcile ──▶ report
+v2_sync ──▶ dbt_build (marts_candidate) ──▶ reconcile (candidate, recorded) ──▶ publish (marts) ──▶ report
 ```
 
 | Task | Runs | Notes |
 |---|---|---|
 | `v2_sync` | `python -m sync.v2_sync --source v2_oltp --target v2_analytics` | Least-privilege login `V2_SYNC_USER` from `.env`; a superuser is refused. Logs the run ID, rows read, inserted, updated and re-read, duplicate events, watermark and lag |
-| `dbt_build` | `dbt build` in `dbt/v2` (profile `fintech_v2`, target `v2`, `DBT_V2_DBNAME=v2_analytics`) | Artifacts in `/tmp/dbt-v2` inside the container, so it never collides with the MVP's `/tmp/dbt` |
-| `reconcile` | `python -m sync.v2_reconcile` | Read-only, 17 checks. Every OLTP row whose current version was visible to the last sync snapshot must be identical in raw (rows changed after it are reported as pending, not as errors). Payment counts, statuses, captured amounts and succeeded refunds must agree per currency between raw, `fct_payments`, both daily bases and the merchant mart, and with OLTP when nothing is pending. One row per payment; no event issues. Any FAIL fails the task |
-| `report` | `python -m sync.v2_report` | Sync run metrics, dbt results by node type, daily KPIs in major units (exact `Decimal` scaling), pipeline duration. Prints no credentials |
+| `dbt_build` | `dbt build` in `dbt/v2` (profile `fintech_v2`, target `v2`, `DBT_V2_DBNAME=v2_analytics`, `--vars v2_pipeline_run_id=<run_id>`) | Builds the **candidate** marts in `marts_candidate`; consumers never read them. An `on-run-start` hook first records the build manifest (`marts_candidate.mart_build_info`: pipeline run, dbt invocation, sync run). Artifacts in `/tmp/dbt-v2` inside the container, so it never collides with the MVP's `/tmp/dbt` |
+| `reconcile` | `python -m sync.v2_reconcile --marts-schema marts_candidate --pipeline-run-id <run_id> --record` | Reads only the data; writes one row to `meta.mart_validations` with the candidate's content fingerprint. Checks the build manifest belongs to this run and to the latest sync run. Every OLTP row whose current version was visible to the last sync snapshot must be identical in raw (rows changed after it are reported as pending, not as errors). Payment counts, statuses, captured amounts and succeeded refunds must agree per currency between raw, `fct_payments`, both daily bases and the merchant mart, and with OLTP when nothing is pending. One row per payment; no event issues. Any FAIL fails the task |
+| `publish` | `python -m sync.v2_publish --pipeline-run-id <run_id>` | Copies the three candidate marts into `marts` and records the publication, in **one transaction**, only after re-verifying every binding (see below) |
+| `report` | `python -m sync.v2_report` | The current publication, sync run metrics, dbt results by node type, daily KPIs in major units (exact `Decimal` scaling), pipeline duration. Prints no credentials |
 
 **Run behavior:**
 - **Explicit V2 environment:** every task gets `V2_OLTP_DB`, `V2_ANALYTICS_DB` and `DBT_V2_DBNAME`.
@@ -477,7 +478,48 @@ v2_sync ──▶ dbt_build ──▶ reconcile ──▶ report
 
 Note on scenario C: `request_refund` stamps `requested_at` with the database clock, so refunds created by the acceptance run carry today's date. Cross-day refund attribution (requested Wednesday, succeeded Friday) is covered by the dbt unit test `ut_daily_dates_follow_each_metric_basis`.
 
+**Publication (release fix 1).**
+
+*Why it's needed:* a failed `dbt build` can leave marts partly rebuilt. In dbt, a model waits for a test only if it is downstream of every model the test reads. So the event-integrity test and the mart reconciliation tests cannot stop marts from being written, and a failing test on one mart skips only its children. dbt therefore writes only the candidate schema, and `sync/v2_publish.py` alone writes `marts`.
+
+*How it binds everything to one run:*
+- **Run identity:** one pipeline run ID (the Airflow `run_id`) connects:
+  - dbt's `run_results.json`: same invocation, `--vars` for this run, every node passing, all three marts built;
+  - the build manifest, which is written before any model reads raw;
+  - a passing validation of that pipeline run, dbt invocation and sync run;
+  - the candidate's content: its fingerprint must equal the validated one.
+- **Staleness:** the sync state must still be active, with the candidate's sync run as its latest run. A sync that committed after the build is refused, and so are stale `run_results.json` files and candidates changed after reconciliation.
+- **No double publication:** a pipeline run or dbt invocation can be published only once.
+
+*The publish transaction:*
+1. `pg_advisory_xact_lock` serializes publishers.
+2. `LOCK … IN SHARE MODE` on the candidate tables stops a concurrent dbt build from replacing them.
+3. `SELECT meta.sync_state … FOR SHARE` stops a concurrent sync from committing.
+4. Every binding above is verified.
+5. For each mart: `DELETE` the published rows, then `INSERT … SELECT` from the candidate. If a mart's columns changed, it is recreated first, and that is refused if any view depends on it.
+6. The `meta.mart_publications` row is inserted, then the transaction commits.
+
+Any failure, at any point before the commit, leaves all three published marts and the publication metadata unchanged. A failed sync, dbt build or reconciliation never even reaches publish.
+
+*Why copying instead of renaming:* the published tables keep their identity, so dependent views and grants survive, and readers are never blocked. Readers take `ACCESS SHARE` locks, while publish needs only `ROW EXCLUSIVE` on the published tables. Renaming would have needed an exclusive lock and could show an empty table to an older REPEATABLE READ snapshot. The cost is a full copy each run (dead rows for vacuum), which is fine at this scale.
+
+*What consumers see:*
+- **One SQL statement** sees exactly one publication of all three marts.
+- **Several READ COMMITTED statements** can each see a different publication.
+- **A consistent multi-query view** needs one REPEATABLE READ transaction. Reading `marts.current_publication` in that same transaction tells you which publication it is.
+- **Staging and intermediate are internal views** over raw: they are always live and are not validated results.
+
+*Evidence:*
+- `tests/v2/test_v2_publish.py`, 14 tests:
+  - rollback after the first mart was copied;
+  - concurrent publishers;
+  - a REPEATABLE READ reader keeps its publication and does not block;
+  - every single statement sees one complete publication while publications change;
+  - refusals for another run's results, stale results from an earlier invocation, missing or failed validation, a candidate changed after validation, a sync after the build, a failed dbt build, and non-`v2_` databases;
+  - views and grants survive;
+  - a column change is refused while a view depends on the mart.
+- The acceptance script checks, on every successful run, that the run published its own candidate. After injected sync, dbt and reconciliation failures, it checks that the published marts and publication are unchanged.
+
 **Limitations:**
-- **Coupling:** the DAG calls the CLIs inside the Airflow image (LocalExecutor). The dbt `run_results.json` handed to `report` relies on both tasks running in the same container.
-- **Failed dbt runs:** a failed dbt build may already have rebuilt some marts before the failing test. The run is still marked failed and nothing downstream runs; the next successful run rebuilds everything.
-- **dbt and reconciliation credentials:** both use the owner's credentials. Reconciliation sessions are read-only.
+- **Coupling:** the DAG calls the CLIs inside the Airflow image (LocalExecutor). The dbt `run_results.json` that `publish` and `report` read relies on all tasks running in the same container. If it doesn't exist, publish is refused, which is safe.
+- **Credentials:** dbt, reconciliation and publish use the owner's credentials. Reconciliation reads in read-only sessions, and writes only its validation row.

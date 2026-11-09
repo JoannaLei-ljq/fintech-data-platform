@@ -16,11 +16,16 @@ test-paths: ["tests"]
 
 clean-targets: ["target", "dbt_packages"]
 
-# Refuse to run anywhere but a v2_* database (the profile already refuses to connect elsewhere).
+# 1. Refuse to run anywhere but a v2_* database (the profile already refuses to connect elsewhere).
+# 2. Record the build manifest (pipeline run, dbt invocation, sync run) BEFORE any model reads
+#    raw, so publication can prove which data the candidate marts were built from.
 on-run-start:
   - "{{ assert_v2_target() }}"
+  - "{{ record_build_manifest() }}"
 
 vars:
+  # Identity of the pipeline run building the candidate marts (Airflow passes its run_id).
+  v2_pipeline_run_id: manual
   # Demo/acceptance only: makes the singular test assert_injected_failure fail on purpose.
   v2_inject_test_failure: false
 
@@ -32,6 +37,8 @@ models:
     intermediate:
       +schema: intermediate
       +materialized: view
+    # Built into marts_candidate; consumers read marts, which only sync/v2_publish.py writes,
+    # after this build and the reconciliation of the same pipeline run both pass.
     marts:
-      +schema: marts
+      +schema: marts_candidate
       +materialized: table

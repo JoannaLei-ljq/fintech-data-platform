@@ -54,13 +54,24 @@ def dbt_summary(path: Path) -> None:
     print(f"  not passing: {bad or 'none'}")
 
 
+def publication_summary(conn) -> None:
+    row = conn.execute("SELECT publication_id, pipeline_run_id, dbt_invocation_id, sync_run_id, validation_id, "
+                       "row_counts, published_at FROM marts.current_publication").fetchone()
+    if row is None:
+        print("publication: none yet (marts are empty until the first validated run)")
+        return
+    pid, run, inv, sync_run, validation, counts, at = row
+    print(f"published marts: publication {pid} at {at:%Y-%m-%dT%H:%M:%SZ} for pipeline run {run}")
+    print(f"  dbt invocation {inv}, sync run {sync_run}, validation {validation}, rows {json.dumps(counts)}")
+
+
 def kpi_summary(conn) -> None:
     rows = conn.execute("""
         SELECT report_date_utc, currency, minor_units, created_payment_count, cohort_captured_amount_minor,
                cohort_success_rate_pct, captured_count, captured_amount_minor, failed_count, outcome_success_rate_pct,
                succeeded_refund_count, succeeded_refund_amount_minor, net_captured_amount_minor
         FROM marts.fct_daily_payments ORDER BY report_date_utc, currency""").fetchall()
-    print("daily KPIs (fct_daily_payments; cohort = created date, outcome = capture/failure date, "
+    print("published daily KPIs (marts.fct_daily_payments; cohort = created date, outcome = capture/failure date, "
           "refunds = succeeded_at date):")
     print(f"  {'date':10s} {'cur':3s} {'created':>7s} {'cohort_cap':>11s} {'cohort%':>7s} {'captured':>11s} "
           f"{'outcome%':>8s} {'refunds':>10s} {'net':>11s}")
@@ -85,6 +96,7 @@ def main() -> None:
     parser.add_argument("--started-at", help="pipeline start time (ISO 8601), for the duration")
     args = parser.parse_args()
     with _connect(args.analytics) as conn:
+        publication_summary(conn)
         sync_summary(conn)
         dbt_summary(args.dbt_run_results)
         kpi_summary(conn)

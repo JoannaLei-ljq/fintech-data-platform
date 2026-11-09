@@ -7,7 +7,8 @@
 #   B  new payment created Monday, captured Tuesday
 #   C  partial refunds (succeeded, failed, still open)
 #   D  idempotent re-runs
-#   E  failure injection (sync, then dbt) and recovery
+#   E  failure injection (sync, dbt, reconciliation): the published marts and their publication
+#      record never change; then recovery
 #   F  events arriving in raw out of business order (a long-running writer)
 #
 # Requires the Docker stack to be running (docker compose up -d). Logs to
@@ -58,10 +59,23 @@ source_vs_raw_counts() {
   done
   echo "${out% }"
 }
+run_id() { sed -n 's/^Triggered payments_v2_pipeline run_id=\([^ ]*\) .*/\1/p' <<<"$RUN"; }
+publication() { q "SELECT coalesce((SELECT publication_id || ' ' || pipeline_run_id FROM marts.current_publication), 'none')"; }
+candidate_matches_published() {
+  q "SELECT bool_and(same) FROM (
+       SELECT NOT EXISTS (SELECT * FROM marts_candidate.fct_payments EXCEPT ALL SELECT * FROM marts.fct_payments)
+          AND NOT EXISTS (SELECT * FROM marts.fct_payments EXCEPT ALL SELECT * FROM marts_candidate.fct_payments) AS same
+       UNION ALL SELECT NOT EXISTS (SELECT * FROM marts_candidate.fct_daily_payments EXCEPT ALL SELECT * FROM marts.fct_daily_payments)
+          AND NOT EXISTS (SELECT * FROM marts.fct_daily_payments EXCEPT ALL SELECT * FROM marts_candidate.fct_daily_payments)
+       UNION ALL SELECT NOT EXISTS (SELECT * FROM marts_candidate.fct_merchant_performance EXCEPT ALL SELECT * FROM marts.fct_merchant_performance)
+          AND NOT EXISTS (SELECT * FROM marts.fct_merchant_performance EXCEPT ALL SELECT * FROM marts_candidate.fct_merchant_performance)) x"
+}
 pipeline_ok() {  # pipeline_ok <label>
   check "$1 run state" "$RUN_STATE" "success"
-  check "$1 task order" "$(task_order)" "v2_sync dbt_build reconcile report"
+  check "$1 task order" "$(task_order)" "v2_sync dbt_build reconcile publish report"
   check "$1 tasks ran sequentially" "$(ordered_in_time)" "sequential"
+  check "$1 published by this run" "$(publication | cut -d' ' -f2)" "$(run_id)"
+  check "$1 published marts = validated candidate" "$(candidate_matches_published)" "t"
 }
 
 echo "### V2 acceptance run $(date -u +%FT%TZ) on $(git branch --show-current) @ $(git rev-parse --short HEAD)"
@@ -137,27 +151,38 @@ check "D financial digest identical after re-runs" "$(digest)" "$DIGEST_BEFORE"
 check "D no duplicate payments/events/refunds" "$(q "SELECT (SELECT count(*) - count(DISTINCT transaction_id) FROM marts.fct_payments) + (SELECT count(*) - count(DISTINCT event_id) FROM raw.payment_events) + (SELECT count(*) - count(DISTINCT refund_id) FROM raw.refunds)")" "0"
 
 # --- E ------------------------------------------------------------------------------------------
-echo; echo "### Scenario E: the open refund (700) succeeds; then a sync failure, a dbt failure, and recovery"
+echo; echo "### Scenario E: the open refund (700) succeeds; then sync, dbt and reconciliation failures, and recovery"
 app <<< "SELECT refund_status FROM complete_refund($R3, 'succeeded');"
-REFUNDS_BEFORE=$(total succeeded_refund_amount_minor); DIGEST_BEFORE=$(digest)
+REFUNDS_BEFORE=$(total succeeded_refund_amount_minor); DIGEST_BEFORE=$(digest); PUB_BEFORE=$(publication)
 W_BEFORE=$(q "SELECT watermark FROM meta.sync_state")
 run_dag sync
 check "E1 run state (sync failure injected)" "$RUN_STATE" "failed"
-check "E1 task states" "$(task_state v2_sync) $(task_state dbt_build) $(task_state reconcile) $(task_state report)" \
-  "failed upstream_failed upstream_failed upstream_failed"
+check "E1 task states" "$(task_state v2_sync) $(task_state dbt_build) $(task_state reconcile) $(task_state publish) $(task_state report)" \
+  "failed upstream_failed upstream_failed upstream_failed upstream_failed"
+check "E1 publication unchanged" "$(publication)" "$PUB_BEFORE"
 check "E1 checkpoint unchanged" "$(q "SELECT watermark FROM meta.sync_state")" "$W_BEFORE"
 check "E1 raw refund still requested (rolled back)" "$(q "SELECT status FROM raw.refunds WHERE refund_id = $R3")" "requested"
 check "E1 marts unchanged" "$(digest)" "$DIGEST_BEFORE"
 check "E1 failure recorded in meta.sync_runs" "$(q "SELECT status || ' ' || error_class FROM meta.sync_runs ORDER BY run_id DESC LIMIT 1")" "failed InjectedFailure"
 run_dag dbt
 check "E2 run state (dbt failure injected)" "$RUN_STATE" "failed"
-check "E2 task states" "$(task_state v2_sync) $(task_state dbt_build) $(task_state reconcile) $(task_state report)" \
-  "success failed upstream_failed upstream_failed"
+check "E2 task states" "$(task_state v2_sync) $(task_state dbt_build) $(task_state reconcile) $(task_state publish) $(task_state report)" \
+  "success failed upstream_failed upstream_failed upstream_failed"
 check "E2 sync itself committed (raw refund succeeded)" "$(q "SELECT status FROM raw.refunds WHERE refund_id = $R3")" "succeeded"
-run_dag; pipeline_ok "E3 recovery"
-check "E3 succeeded refunds +700 exactly once" "$(( $(total succeeded_refund_amount_minor) - REFUNDS_BEFORE ))" "700"
-check "E3 6001 refunds" "$(q "SELECT succeeded_refund_amount_minor || ' ' || pending_refund_amount_minor || ' ' || remaining_refundable_amount_minor FROM marts.fct_payments WHERE transaction_id = 6001")" "1700 0 2500"
-check "E3 no duplicates" "$(q "SELECT (SELECT count(*) FROM marts.fct_payments) || ' ' || (SELECT count(*) FROM raw.refunds) || ' ' || (SELECT count(*) FROM raw.payment_events)")" "5 5 14"
+check "E2 candidate rebuilt with the new refund (not published)" "$(q "SELECT succeeded_refund_amount_minor FROM marts_candidate.fct_payments WHERE transaction_id = 6001")" "1700"
+check "E2 published marts unchanged" "$(digest)" "$DIGEST_BEFORE"
+check "E2 publication unchanged" "$(publication)" "$PUB_BEFORE"
+run_dag reconcile
+check "E3 run state (reconciliation failure injected)" "$RUN_STATE" "failed"
+check "E3 task states" "$(task_state v2_sync) $(task_state dbt_build) $(task_state reconcile) $(task_state publish) $(task_state report)" \
+  "success success failed upstream_failed upstream_failed"
+check "E3 failed validation recorded for this run" "$(q "SELECT passed || ' ' || pipeline_run_id FROM meta.mart_validations ORDER BY validation_id DESC LIMIT 1")" "false $(run_id)"
+check "E3 published marts unchanged" "$(digest)" "$DIGEST_BEFORE"
+check "E3 publication unchanged" "$(publication)" "$PUB_BEFORE"
+run_dag; pipeline_ok "E4 recovery"
+check "E4 succeeded refunds +700 exactly once" "$(( $(total succeeded_refund_amount_minor) - REFUNDS_BEFORE ))" "700"
+check "E4 6001 refunds" "$(q "SELECT succeeded_refund_amount_minor || ' ' || pending_refund_amount_minor || ' ' || remaining_refundable_amount_minor FROM marts.fct_payments WHERE transaction_id = 6001")" "1700 0 2500"
+check "E4 no duplicates" "$(q "SELECT (SELECT count(*) FROM marts.fct_payments) || ' ' || (SELECT count(*) FROM raw.refunds) || ' ' || (SELECT count(*) FROM raw.payment_events)")" "5 5 14"
 
 # --- F ------------------------------------------------------------------------------------------
 echo; echo "### Scenario F: a long-running writer; raw ingestion order differs from business order"
