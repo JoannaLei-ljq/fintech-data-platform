@@ -16,6 +16,11 @@ Checks (any FAIL exits non-zero; WARN does not):
                      are pending for the next sync).
   build_identity     the candidate marts were built (dbt build manifest) by the expected pipeline
                      run, from the sync run that is still the latest one.
+  kpi.payments       every fct_payments row, kpi.daily every (date, currency) row and kpi.merchant
+  kpi.daily          every (merchant, date, currency) row, field by field, against an independent
+  kpi.merchant       Python recomputation from raw (sync/v2_kpi_reference.py): capture and failure
+                     dates from the payment events, refunds by succeeded_at, rates with Decimal.
+  dates.events_vs_transactions  the event times and the transactions' lifecycle columns agree.
 
 By default the CANDIDATE marts (marts_candidate) are reconciled, before publication. With
 record=True / --record the outcome is stored in meta.mart_validations together with the
@@ -34,6 +39,7 @@ from dataclasses import dataclass, field
 import psycopg
 from dotenv import load_dotenv
 
+from sync.v2_kpi_reference import DAILY_FIELDS, MERCHANT_FIELDS, PAYMENT_FIELDS, compare, load_raw, mart_rows
 from sync.v2_marts import CANDIDATE_SCHEMA, candidate_fingerprint, read_build_info
 from sync.v2_sync import TABLES, SyncCredentials
 from tools.db_guard import UnsafeDatabaseTarget
@@ -185,6 +191,19 @@ def reconcile(oltp_db: str = "v2_oltp", analytics_db: str = "v2_analytics", *, m
             report.check(_norm(src) == _norm(mart) and _norm(src_refunds) == _norm(mart_refunds), "source_vs_marts",
                          f"payments oltp={_fmt(src)} mart={_fmt(mart)}; succeeded refunds oltp={_fmt(src_refunds)} "
                          f"mart={_fmt(mart_refunds)}")
+
+        reference = load_raw(wh)
+        mart_payments, mart_daily, mart_merchant = mart_rows(wh, marts_schema)
+        for name, expected, actual, fields in (("payments", reference.payments, mart_payments, PAYMENT_FIELDS),
+                                               ("daily", reference.daily, mart_daily, DAILY_FIELDS),
+                                               ("merchant", reference.merchant, mart_merchant, MERCHANT_FIELDS)):
+            problems = compare(expected, actual, fields)
+            report.check(not problems, f"kpi.{name}",
+                         f"{len(expected)} rows x {len(fields)} fields recomputed from raw, {len(problems)} differ"
+                         + (f"; e.g. {problems[:3]}" if problems else ""))
+        report.check(not reference.date_issues, "dates.events_vs_transactions",
+                     f"{len(reference.date_issues)} disagreements" +
+                     (f"; e.g. {reference.date_issues[:3]}" if reference.date_issues else ""))
 
         if inject_failure:
             report.add("FAIL", "injected_failure", "failure injected on request (demo only)")

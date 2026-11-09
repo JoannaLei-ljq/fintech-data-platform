@@ -101,3 +101,32 @@ unit_tests:
       rows:
         - {transaction_id: 1, amount_minor: 10000, succeeded_refund_amount_minor: 2500, pending_refund_amount_minor: 700, failed_refund_amount_minor: 500, remaining_refundable_amount_minor: 6800, net_captured_amount_minor: 7500, status_matches_events: true, is_fully_refunded: false}
         - {transaction_id: 2, amount_minor: 3000, succeeded_refund_amount_minor: 0, pending_refund_amount_minor: 0, failed_refund_amount_minor: 0, remaining_refundable_amount_minor: 0, net_captured_amount_minor: 0, status_matches_events: true, is_fully_refunded: false}
+
+  - name: ut_merchant_attribution_cross_date_refunds_and_refund_rate
+    description: >
+      Captures and failures land on their own dates per merchant; a refund that succeeds days
+      after the capture counts as that day's refund flow AND against the capture-date cohort's
+      refund rate; merchants and currencies never mix; zero denominators give NULL.
+    model: fct_merchant_performance
+    given:
+      - input: ref('fct_payments')
+        rows:
+          - {transaction_id: 1, merchant_id: 101, currency: USD, amount_minor: 4200, is_captured: true,  is_failed: false, created_date_utc: "2026-11-02", captured_date_utc: "2026-11-03", succeeded_refund_amount_minor: 700}
+          - {transaction_id: 2, merchant_id: 101, currency: USD, amount_minor: 1000, is_captured: false, is_failed: true,  created_date_utc: "2026-11-02", failed_date_utc: "2026-11-02", succeeded_refund_amount_minor: 0}
+          - {transaction_id: 3, merchant_id: 102, currency: USD, amount_minor: 3000, is_captured: true,  is_failed: false, created_date_utc: "2026-11-02", captured_date_utc: "2026-11-02", succeeded_refund_amount_minor: 3000}
+          - {transaction_id: 4, merchant_id: 102, currency: JPY, amount_minor: 1500, is_captured: true,  is_failed: false, created_date_utc: "2026-11-02", captured_date_utc: "2026-11-02", succeeded_refund_amount_minor: 0}
+      - input: ref('int_refund_completions')
+        rows:
+          - {refund_id: 9,  transaction_id: 1, merchant_id: 101, currency: USD, amount_minor: 700,  succeeded_date_utc: "2026-11-06"}
+          - {refund_id: 10, transaction_id: 3, merchant_id: 102, currency: USD, amount_minor: 3000, succeeded_date_utc: "2026-11-02"}
+      - input: ref('stg_merchants')
+        rows:
+          - {merchant_id: 101, merchant_name: Alpha}
+          - {merchant_id: 102, merchant_name: Beta}
+    expect:
+      rows:
+        - {merchant_id: 101, report_date_utc: "2026-11-02", currency: USD, created_payment_count: 2, captured_count: 0, captured_amount_minor: 0,    failed_count: 1, outcome_success_rate_pct: 0.00,   succeeded_refund_amount_minor: 0,    net_captured_amount_minor: 0,    refunded_of_captured_amount_minor: 0,    refund_rate_pct: null}
+        - {merchant_id: 101, report_date_utc: "2026-11-03", currency: USD, created_payment_count: 0, captured_count: 1, captured_amount_minor: 4200, failed_count: 0, outcome_success_rate_pct: 100.00, succeeded_refund_amount_minor: 0,    net_captured_amount_minor: 4200, refunded_of_captured_amount_minor: 700,  refund_rate_pct: 16.67}
+        - {merchant_id: 101, report_date_utc: "2026-11-06", currency: USD, created_payment_count: 0, captured_count: 0, captured_amount_minor: 0,    failed_count: 0, outcome_success_rate_pct: null,   succeeded_refund_amount_minor: 700,  net_captured_amount_minor: -700, refunded_of_captured_amount_minor: 0,    refund_rate_pct: null}
+        - {merchant_id: 102, report_date_utc: "2026-11-02", currency: JPY, created_payment_count: 1, captured_count: 1, captured_amount_minor: 1500, failed_count: 0, outcome_success_rate_pct: 100.00, succeeded_refund_amount_minor: 0,    net_captured_amount_minor: 1500, refunded_of_captured_amount_minor: 0,    refund_rate_pct: 0.00}
+        - {merchant_id: 102, report_date_utc: "2026-11-02", currency: USD, created_payment_count: 1, captured_count: 1, captured_amount_minor: 3000, failed_count: 0, outcome_success_rate_pct: 100.00, succeeded_refund_amount_minor: 3000, net_captured_amount_minor: 0,    refunded_of_captured_amount_minor: 3000, refund_rate_pct: 100.00}

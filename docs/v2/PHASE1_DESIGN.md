@@ -431,7 +431,7 @@ raw.refunds ────────── stg_refunds ─┬─ int_refund_tota
 - **Negative integration tests** (`tests/v2/test_dbt_v2.py`): each corrupts `raw.*` in a disposable database (state mismatch, gap after a terminal state, over-refund, refund on a failed payment, currency mismatch, inconsistent refund timestamps, payment without events) and requires the matching dbt test to fail.
 - `assert_injected_failure` fails only with `--vars '{v2_inject_test_failure: true}'`, for failure demos.
 
-**Reconciliation across systems.** OLTP ↔ raw is checked outside dbt, because the two databases are separate. That check is in Step 8 (`sync/v2_reconcile.py`).
+**Reconciliation across systems.** OLTP ↔ raw is checked outside dbt, because the two databases are separate. The KPIs are independently recomputed from raw outside dbt as well (release fix 2). Both live in `sync/v2_reconcile.py`, described under Step 8.
 
 **Limitations.**
 - **Full rebuilds:** marts are rebuilt in full on every run. That's fine at demo scale, but late events would need an incremental strategy with an event-date lookback later.
@@ -449,7 +449,7 @@ v2_sync ──▶ dbt_build (marts_candidate) ──▶ reconcile (candidate, re
 |---|---|---|
 | `v2_sync` | `python -m sync.v2_sync --source v2_oltp --target v2_analytics` | Least-privilege login `V2_SYNC_USER` from `.env`; a superuser is refused. Logs the run ID, rows read, inserted, updated and re-read, duplicate events, watermark and lag |
 | `dbt_build` | `dbt build` in `dbt/v2` (profile `fintech_v2`, target `v2`, `DBT_V2_DBNAME=v2_analytics`, `--vars v2_pipeline_run_id=<run_id>`) | Builds the **candidate** marts in `marts_candidate`; consumers never read them. An `on-run-start` hook first records the build manifest (`marts_candidate.mart_build_info`: pipeline run, dbt invocation, sync run). Artifacts in `/tmp/dbt-v2` inside the container, so it never collides with the MVP's `/tmp/dbt` |
-| `reconcile` | `python -m sync.v2_reconcile --marts-schema marts_candidate --pipeline-run-id <run_id> --record` | Reads only the data; writes one row to `meta.mart_validations` with the candidate's content fingerprint. Checks the build manifest belongs to this run and to the latest sync run. Every OLTP row whose current version was visible to the last sync snapshot must be identical in raw (rows changed after it are reported as pending, not as errors). Payment counts, statuses, captured amounts and succeeded refunds must agree per currency between raw, `fct_payments`, both daily bases and the merchant mart, and with OLTP when nothing is pending. One row per payment; no event issues. Any FAIL fails the task |
+| `reconcile` | `python -m sync.v2_reconcile --marts-schema marts_candidate --pipeline-run-id <run_id> --record` | Reads only the data; writes one row to `meta.mart_validations` with the candidate's content fingerprint. Checks the build manifest belongs to this run and to the latest sync run. Recomputes every mart row independently from raw (`kpi.*`, release fix 2). Every OLTP row whose current version was visible to the last sync snapshot must be identical in raw (rows changed after it are reported as pending, not as errors). Payment counts, statuses, captured amounts and succeeded refunds must agree per currency between raw, `fct_payments`, both daily bases and the merchant mart, and with OLTP when nothing is pending. One row per payment; no event issues. Any FAIL fails the task |
 | `publish` | `python -m sync.v2_publish --pipeline-run-id <run_id>` | Copies the three candidate marts into `marts` and records the publication, in **one transaction**, only after re-verifying every binding (see below) |
 | `report` | `python -m sync.v2_report` | The current publication, sync run metrics, dbt results by node type, daily KPIs in major units (exact `Decimal` scaling), pipeline duration. Prints no credentials |
 
@@ -477,6 +477,38 @@ v2_sync ──▶ dbt_build (marts_candidate) ──▶ reconcile (candidate, re
 | End | Protected-database fingerprint unchanged |
 
 Note on scenario C: `request_refund` stamps `requested_at` with the database clock, so refunds created by the acceptance run carry today's date. Cross-day refund attribution (requested Wednesday, succeeded Friday) is covered by the dbt unit test `ut_daily_dates_follow_each_metric_basis`.
+
+**Independent KPI reconciliation (release fix 2).**
+
+*Why it's needed:* dbt's own reconciliation tests and the original checks compared grand totals per currency. A bug that puts revenue, failures or refunds on the wrong date or merchant, or computes a rate wrongly, leaves every total intact.
+
+*How it works:* `sync/v2_kpi_reference.py` recomputes every metric of the three marts in plain Python from raw rows:
+- **daily:** 13 fields per (date, currency);
+- **merchant:** 10 fields per (merchant, date, currency);
+- **payments:** 18 fields per payment.
+
+It deliberately avoids dbt's derivations:
+- **Capture and failure dates** come from the `payment.captured` / `payment.failed` **event** times, while dbt uses `transactions.captured_at` / `failed_at`. The two sources are also cross-checked (`dates.events_vs_transactions`).
+- **Refunds** are dated by `succeeded_at` and attributed to the payment's merchant.
+- **Rates** use `Decimal` with half-up rounding to 2 places, and `None` on a zero denominator.
+
+`v2_reconcile` compares every row and field against the candidate marts (`kpi.payments`, `kpi.daily`, `kpi.merchant`). Any missing row, unexpected row or differing field fails.
+
+*Tests:*
+- **`tests/v2/test_kpi_reference.py`** (7) covers the calculator on hand-built rows: cross-date refunds, cohort vs outcome dates, rates and rounding, zero denominators, currency separation, merchant refund rate, and disagreeing date sources.
+- **`tests/v2/test_v2_reconcile.py`** covers corruptions that **keep every grand total correct**. In each case the specific KPI check fails while all seven total checks still pass:
+  - captured volume swapped between dates;
+  - a failure moved to another date;
+  - only a success rate changed;
+  - refund volume moved to another merchant;
+  - only a refund rate changed;
+  - one payment's capture date changed.
+- **A buggy copy of the dbt project** that dates captures by creation day:
+  - the dbt unit test `ut_daily_dates_follow_each_metric_basis` catches it;
+  - with unit tests excluded, every dbt data test passes, but `kpi.daily` fails.
+- **A new dbt unit test** covers merchant attribution, cross-date refunds and the refund rate.
+
+*Limitation:* the calculator holds raw rows in memory, which suits this project's data size. It is a second implementation of the same business rules, so any change to a definition must be made in both places, deliberately.
 
 **Publication (release fix 1).**
 
