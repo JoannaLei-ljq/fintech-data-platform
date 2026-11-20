@@ -1,21 +1,60 @@
-# Fintech Data Platform (MVP + V2)
+# Fintech Data Platform
 
-A local batch pipeline for payment data:
+A batch data pipeline for payments that is built around **financial correctness**: every published number is tested, reconciled back to the source, and published atomically, or not at all.
+
+PostgreSQL (OLTP) → incremental Python sync → dbt (staging → intermediate → marts) → Airflow write-audit-publish. Everything runs locally in Docker.
 
 ```
-demo_oltp (Postgres)  ──incremental sync──▶  demo_analytics.raw  ──dbt──▶  staging views  ──▶  marts.fct_daily_payments
-        ▲                 (Python, upsert +          (replicas +              (tests: keys,           (success amount,
-        │                  checkpoint in one         meta.sync_checkpoints)     relationships,          success rate,
-  business writes          transaction)                                         refund checks)          refund amount)
-                          └──────────── orchestrated by Airflow DAG fintech_demo_pipeline ────────────┘
+v2_oltp (OLTP)                  v2_analytics                                            Airflow: payments_v2_pipeline
+ transactions, payment_events    raw.*  ── dbt ──▶ staging ─▶ intermediate ─▶ marts       v2_sync ─▶ dbt_build ─▶ reconcile ─▶ publish ─▶ report
+ refunds, currencies, ...  ─sync─▶ (xid watermark,  (6 views)  (event state,   fct_payments
+ (writes only via SECURITY        one snapshot,              refund totals,  fct_daily_payments
+  DEFINER functions)              insert-only events)        event issues)   fct_merchant_performance
 ```
+
+## Design decisions
+
+| Problem | Decision |
+|---|---|
+| A timestamp watermark misses rows from long transactions that commit late | The sync uses a **transaction-ID watermark** over one `REPEATABLE READ` snapshot. Data and checkpoint commit in the same transaction. |
+| A failed run must never leave consumers with half-updated numbers | **Write-audit-publish:** dbt builds into a candidate schema, the run reconciles OLTP ↔ raw ↔ candidate, and only then publishes to `marts` in one transaction. |
+| Joining payments to refunds row by row double-counts payments | Payments and refunds are aggregated **separately**, then joined on day and currency. A dbt test asserts that the totals match staging. A naive join gives $270 instead of $170. |
+| Money must stay exact and comparable | Integer minor units per currency. Currencies are never summed together. Refunds can never exceed the captured amount. |
+| Bad event histories should be visible, not silently fixed | Payment state is derived from `event_sequence` only. Malformed histories are flagged, not repaired. |
+| The pipeline should not need more access than it uses | The sync runs as a least-privilege login and refuses to continue when the source database identity changes. |
+
+## Quality and evidence
+
+- **81 dbt data tests and 6 dbt unit tests** run in every build.
+- **313 pytest tests** run against disposable databases.
+- **End-to-end acceptance through Airflow** covers scenarios A–F, including injected sync and dbt failures, late-committing writers, and recovery. The latest run shows 112 checks passing and none failing ([`docs/evidence/`](docs/evidence/)).
+- Full design, proofs and runbooks: [`docs/v2/PHASE1_DESIGN.md`](docs/v2/PHASE1_DESIGN.md). Three-minute walkthrough: [`docs/DEMO.md`](docs/DEMO.md).
+
+## Quick start
+
+```bash
+docker compose up -d
+```
+```bash
+./scripts/v2/reset_v2.sh
+```
+```bash
+./scripts/v2/trigger_v2_dag.sh
+```
+
+The Airflow UI is at http://127.0.0.1:8080. Credentials go in `.env`; copy `.env.example` to create it.
 
 | Component | Version | Where |
 |---|---|---|
 | PostgreSQL | 16 (alpine) | `127.0.0.1:5434`, container `fintech-postgres` |
 | Airflow | 3.3.2, LocalExecutor | UI at `http://127.0.0.1:8080` |
-| dbt | dbt-core 1.12.5 + dbt-postgres 1.11.0 | `dbt/`, runs inside the Airflow image |
-| Python sync | psycopg 3 | `sync/incremental_sync.py` |
+| dbt | dbt-core 1.12.5 + dbt-postgres 1.11.0 | `dbt/v2` (V2), `dbt/` (MVP), runs inside the Airflow image |
+| Python sync | psycopg 3 | `sync/v2_sync.py` (V2), `sync/incremental_sync.py` (MVP) |
+
+---
+
+The sections below are the detailed reference: V2 internals, the original MVP, and the operator runbooks.
+
 
 ## V2: payment lifecycle, reliable sync, analytics and orchestration
 
