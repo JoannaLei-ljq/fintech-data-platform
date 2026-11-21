@@ -1,7 +1,8 @@
-# V2 Phase 1: approved design and implementation notes
+# V2 design notes
 
-Status: Steps 0–6 implemented on `v2-phase1` (pushed). Steps 7–8 implemented on `v2-analytics-orchestration` (local).
-The MVP is frozen at tag `v0.1.0-mvp`.
+V2 was built in stages, Steps 0–8 below, each with its own commit and tests, followed by three release fixes from a final architecture audit (write-audit-publish, independent KPI reconciliation, timestamp provenance). The original MVP is the first commit (`9268cb2`) and still runs unchanged.
+
+**Reading guide:** the decisions most worth reading are the transaction-ID watermark (Step 6), write-audit-publish (Step 8, *Publication*), independent KPI reconciliation (Step 8) and timestamp provenance (Step 7, *Synthetic backfill*).
 
 ## Isolation and safety
 
@@ -51,7 +52,7 @@ Ordering is handled in two distinct places, and they will be tested separately.
 |---|---|---|
 | `succeeded` | `captured` | Money moved. Synthetic events: created → authorized → captured. |
 | `failed` | `failed` | Synthetic events: created → failed, with `failure_code = 'legacy_unknown'`. |
-| `pending` | `created` | Approved 2026-11-07. In the MVP, `pending` only meant "not yet decided" (README, `fct_daily_payments`), and `pending → succeeded` was a single jump. No authorization is recorded anywhere, and the demo row 3004 was never updated after insert (`updated_at = created_at`). Mapping to `authorized` would invent an event, so only `payment.created` is backfilled. Metric parity is unaffected, because V2 `pending_count = created + authorized`. |
+| `pending` | `created` | Decision: in the MVP, `pending` only meant "not yet decided" (README, `fct_daily_payments`), and `pending → succeeded` was a single jump. No authorization is recorded anywhere, and the demo row 3004 was never updated after insert (`updated_at = created_at`). Mapping to `authorized` would invent an event, so only `payment.created` is backfilled. Metric parity is unaffected, because V2 `pending_count = created + authorized`. |
 
 The MVP never recorded *when* authorization, capture or failure happened, only when the row last changed (`updated_at`). That timestamp is the latest moment those steps could have happened, so it is used for `authorized_at`, `captured_at` and `failed_at`. All backfilled events carry `source = 'migration_backfill'`, so they can be told apart from real ones.
 
@@ -91,9 +92,9 @@ The MVP never recorded *when* authorization, capture or failure happened, only w
   - append-only triggers covering UPDATE, DELETE and TRUNCATE.
 - **Backfill:** 9 events for the 4 demo payments. IDs are deterministic UUID v5 values, derived from the payment and its sequence number. A final assertion aborts the migration if history and current state disagree for any payment.
 
-### Deviations from the approved design
+### Changes from the initial plan
 1. **Step 3 is split into two migrations,** V003 (state) and V004 (history), to keep each one reviewable.
-2. **Foreign-key indexes were added in V003.** This addresses audit finding R14; it wasn't listed in Step 3.
+2. **Foreign-key indexes were added in V003.** The MVP schema lacked them; they weren't part of the original Step 3 plan.
 3. **Backfilled timestamps are approximate.** Lifecycle timestamps use `updated_at` as an upper bound, and backfilled `received_at` is the migration time (the true ingestion time).
 4. **The MVP sync now refuses `fintech_analytics` as a target** unless `FINTECH_ALLOW_PROTECTED_DB_WRITES=1` is set (Step 0 guard).
 
@@ -435,7 +436,7 @@ No historical value is rewritten or invented; every timestamp below is labelled 
 - **Upgrade order** for an existing deployment: OLTP V009, then analytics V005, then the code. The next incremental sync fills `raw.refunds.record_source`.
 - Use these timestamps only to date the MVP rows, never to measure processing latency.
 
-**Data quality.** 81 data tests and 6 unit tests run in every `dbt build`:
+**Data quality.** 84 data tests and 7 unit tests run in every `dbt build`:
 - **Structure:** unique and not-null primary keys; relationships to users, merchants, currencies and payments; accepted statuses, event types and sources; `minor_units` in 0–4; positive amounts; unique `(transaction_id, event_sequence)`.
 - **Events** (`assert_no_payment_event_issues`): contiguity, legal paths (so nothing follows a terminal state), conflicting event IDs, derived state equal to `transactions.status` and `last_event_sequence`, amount and currency consistency.
 - **Refunds:** currency equals the payment's; requested + succeeded ≤ the payment amount, and refunds only on captured payments; terminal timestamps consistent with the status; refunded volume counts succeeded refunds only, in every layer.
@@ -486,7 +487,7 @@ v2_sync ──▶ dbt_build (marts_candidate) ──▶ reconcile (candidate, re
   - `sync`: the sync raises after its writes, before commit;
   - `dbt`: the singular test `assert_injected_failure` fails.
 
-**End-to-end acceptance** (`scripts/v2/run_acceptance_v2.sh`, 72 checks, every pipeline run is a real DAG run). The script rebuilds the V2 databases from the seed, then:
+**End-to-end acceptance** (`scripts/v2/run_acceptance_v2.sh`, 112 checks in the latest run, every pipeline run is a real DAG run). The script rebuilds the V2 databases from the seed, then:
 
 | Scenario | What it does and checks |
 |---|---|

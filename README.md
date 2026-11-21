@@ -4,13 +4,22 @@ A batch data pipeline for payments that is built around **financial correctness*
 
 PostgreSQL (OLTP) → incremental Python sync → dbt (staging → intermediate → marts) → Airflow write-audit-publish. Everything runs locally in Docker.
 
+```mermaid
+flowchart TB
+  subgraph OLTP["v2_oltp · PostgreSQL OLTP"]
+    W["Write functions (SECURITY DEFINER)<br/>record_payment_event · request_refund · complete_refund"] --> T[("transactions<br/>payment_events (append-only)<br/>refunds")]
+  end
+  subgraph AN["v2_analytics"]
+    RAW[("raw.*")] --> DBT["dbt: staging → intermediate"] --> CAND[("marts_candidate")]
+    CAND -->|"publish: one transaction,<br/>only if validated"| MARTS[("marts.*<br/>fct_payments · fct_daily_payments<br/>fct_merchant_performance")]
+  end
+  T -->|"incremental sync<br/>transaction-ID watermark · one snapshot<br/>least-privilege login"| RAW
+  T -.-> REC{{"independent reconciliation<br/>OLTP ↔ raw ↔ candidate"}}
+  CAND -.-> REC
+  REC -.->|"pass"| MARTS
 ```
-v2_oltp (OLTP)                  v2_analytics                                            Airflow: payments_v2_pipeline
- transactions, payment_events    raw.*  ── dbt ──▶ staging ─▶ intermediate ─▶ marts       v2_sync ─▶ dbt_build ─▶ reconcile ─▶ publish ─▶ report
- refunds, currencies, ...  ─sync─▶ (xid watermark,  (6 views)  (event state,   fct_payments
- (writes only via SECURITY        one snapshot,              refund totals,  fct_daily_payments
-  DEFINER functions)              insert-only events)        event issues)   fct_merchant_performance
-```
+
+Orchestrated by the Airflow DAG `payments_v2_pipeline`: **v2_sync → dbt_build → reconcile → publish → report**.
 
 ## Design decisions
 
@@ -23,11 +32,23 @@ v2_oltp (OLTP)                  v2_analytics                                    
 | Bad event histories should be visible, not silently fixed | Payment state is derived from `event_sequence` only. Malformed histories are flagged, not repaired. |
 | The pipeline should not need more access than it uses | The sync runs as a least-privilege login and refuses to continue when the source database identity changes. |
 
+## Problems found and fixed
+
+Each of these was found by reproducing it or by auditing the implementation, then fixed and covered by tests.
+
+| Problem | How it was found | Fix |
+|---|---|---|
+| A timestamp cursor (`updated_at`, `received_at`) **silently loses rows** from transactions that commit late | Reproduced with real concurrent transactions; a concurrency fuzz test left **221 rows missing or stale**, against **0** for the transaction-ID watermark | Watermark on the snapshot's `xmin` (`xid8`), with newer versions applied in run order rather than by timestamp |
+| A unique constraint added to support a refund-currency foreign key **broke concurrent payment creation** | The existing concurrency tests failed after the change | Dropped the constraint and enforced refund currency with a commit-time check, leaving the payment write function untouched |
+| A failed `dbt build` could **publish partially rebuilt marts**: dbt tests that read several models cannot block their downstream models | Final architecture audit, confirmed in dbt-core's test-blocking logic | Write-audit-publish: build a candidate schema, reconcile it, publish all three marts in one transaction bound to the same pipeline run |
+| Reconciliation compared **grand totals only**, so revenue put on the wrong day or merchant would pass | Final architecture audit | An independent Python recomputation of every mart row and field; negative tests corrupt dates, merchants and rates while keeping totals correct |
+| Migrated MVP history carried **synthetic timestamps** that looked like real processor times | Final architecture audit | Explicit provenance columns and estimate flags through OLTP, sync, raw and marts; nothing rewritten |
+
 ## Quality and evidence
 
-- **81 dbt data tests and 6 dbt unit tests** run in every build.
+- **84 dbt data tests and 7 dbt unit tests** run in every build.
 - **313 pytest tests** run against disposable databases.
-- **End-to-end acceptance through Airflow** covers scenarios A–F, including injected sync and dbt failures, late-committing writers, and recovery. The latest run shows 112 checks passing and none failing ([`docs/evidence/`](docs/evidence/)).
+- **End-to-end acceptance through Airflow** covers scenarios A–F, including injected sync, dbt and reconciliation failures, late-committing writers, and recovery. The latest run shows 112 checks passing and none failing (see [`docs/evidence/`](docs/evidence/README.md) for which log to read).
 - Full design, proofs and runbooks: [`docs/v2/PHASE1_DESIGN.md`](docs/v2/PHASE1_DESIGN.md). Three-minute walkthrough: [`docs/DEMO.md`](docs/DEMO.md).
 
 ## Quick start
@@ -60,15 +81,12 @@ The sections below are the detailed reference: V2 internals, the original MVP, a
 
 V2 rebuilds the pipeline around financial correctness. It runs only in its own databases (`v2_oltp`, `v2_analytics`); the MVP below is unchanged. Full design, proofs and runbooks: [`docs/v2/PHASE1_DESIGN.md`](docs/v2/PHASE1_DESIGN.md).
 
+```mermaid
+flowchart LR
+  S["v2_sync<br/>raw.* + checkpoint<br/>in one transaction"] --> B["dbt_build<br/>marts_candidate<br/>+ build manifest"] --> R["reconcile<br/>independent checks,<br/>validation recorded"] --> P["publish<br/>all three marts in<br/>one transaction"] --> E["report"]
 ```
-v2_oltp (OLTP)                         v2_analytics                                          Airflow: payments_v2_pipeline
- transactions (current state)           raw.*  ── dbt/v2 ──▶ staging ─▶ intermediate ─▶ marts   v2_sync ─▶ dbt_build ─▶ reconcile ─▶ report
- payment_events (append-only)  ──sync──▶ (latest   (6 views)  (event state,   fct_payments
- refunds, currencies, users...   xid      state +             refund totals,  fct_daily_payments
- written only via               water-    insert-only         event issues)   fct_merchant_performance
- record_payment_event /          mark)    events, meta.*)
- request_refund / complete_refund
-```
+
+If any step fails, the later steps don't run, and the published `marts.*` stay exactly as the last successful run left them.
 
 - **OLTP rules:**
   - integer minor units per currency;
@@ -81,7 +99,7 @@ v2_oltp (OLTP)                         v2_analytics                             
   - it derives payment state from `event_sequence` only, and flags malformed histories rather than repairing them;
   - refunded volume counts **succeeded** refunds on their `succeeded_at` date;
   - currencies are never added together;
-  - 81 data tests and 6 unit tests run in every build.
+  - 84 data tests and 7 unit tests run in every build.
 - **Airflow `payments_v2_pipeline`:** write → audit → publish. Sync → dbt build (`marts_candidate`) → reconciliation (OLTP ↔ raw ↔ candidate, recorded) → **publish** (one transaction into `marts`, only for the same validated run) → report. A failed sync, dbt build or reconciliation never changes the published marts. It's manual by default, runs one at a time, and a failed run is safe to re-trigger.
 - **Consumers** read `marts.*`. Use one REPEATABLE READ transaction when several queries must agree; `marts.current_publication` says which publication you see.
 
@@ -97,7 +115,7 @@ That rebuilds `v2_oltp` / `v2_analytics` from the seed, applies all migrations a
 ```bash
 ./scripts/v2/trigger_v2_dag.sh
 ```
-That runs the full pipeline through Airflow. `sync` or `dbt` as an argument injects a failure.
+That runs the full pipeline through Airflow. `sync`, `dbt` or `reconcile` as an argument injects a failure at that step.
 
 ```bash
 ./scripts/v2/run_acceptance_v2.sh
@@ -244,3 +262,7 @@ docker compose up -d --wait postgres    # Postgres only, without Airflow
 - **Late commits:** a long source transaction that commits after a sync, with an earlier `updated_at`, could be missed. A lookback window or CDC would close that gap.
 - **Full rebuild:** `fct_daily_payments` is rebuilt as a full table on every run. That is fine at this size; an incremental model would be the next step.
 - **Single superuser:** Airflow and dbt connect with the Postgres superuser from `.env`. This is acceptable for a local demo, not for shared environments.
+
+## License
+
+MIT, see [`LICENSE`](LICENSE).
