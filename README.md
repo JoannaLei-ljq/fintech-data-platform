@@ -51,6 +51,34 @@ Each of these was found by reproducing it or by auditing the implementation, the
 - **End-to-end acceptance through Airflow** covers scenarios A–F, including injected sync, dbt and reconciliation failures, late-committing writers, and recovery. The latest run shows 112 checks passing and none failing (see [`docs/evidence/`](docs/evidence/README.md) for which log to read).
 - Full design, proofs and runbooks: [`docs/v2/PHASE1_DESIGN.md`](docs/v2/PHASE1_DESIGN.md). Three-minute walkthrough: [`docs/DEMO.md`](docs/DEMO.md).
 
+## See it run
+
+A successful run of the Airflow DAG `payments_v2_pipeline`: sync, dbt build into the candidate schema, independent reconciliation, atomic publish, report.
+
+![Successful Airflow run: v2_sync, dbt_build, reconcile, publish and report all succeeded](docs/images/airflow_run_success.png)
+
+The same pipeline with a failing dbt test injected. `dbt_build` fails, so reconcile, publish and report never run, and the published marts stay exactly as the last successful run left them.
+
+![Airflow run with an injected dbt failure: dbt_build failed, reconcile, publish and report upstream_failed](docs/images/airflow_run_dbt_failure.png)
+
+The `report` task's output from the successful run above (demo seed: $150 captured, 66.67% success rate, $30 refunded):
+
+```text
+published marts: publication 1 at 2026-11-22T05:30:48Z for pipeline run manual__20261122T053025Z
+  dbt invocation c984d010-ba9f-4ba0-bdea-0ed6566f4d63, sync run 1, validation 1, rows {"fct_payments": 4, "fct_daily_payments": 1, "fct_merchant_performance": 2}
+sync run 1 (initial, succeeded) 2026-11-22T05:30:33Z -> 05:30:33Z
+  watermark 0 -> 171099, lag 0 xids, oldest open writer -s
+  rows read 27 {"users": 3, "refunds": 2, "merchants": 2, "currencies": 7, "transactions": 4, "payment_events": 9}
+  re-read 0, duplicate events 0
+dbt build: 4.7s, model success=13, operation success=2, test pass=84, unit_test pass=7
+  not passing: none
+published daily KPIs (marts.fct_daily_payments; cohort = created date, outcome = capture/failure date, refunds = succeeded_at date):
+  date       cur created  cohort_cap cohort%    captured outcome%    refunds         net
+  2026-10-15*USD       4      150.00   66.67      150.00    66.67      30.00      120.00
+  * some captures, failures or refunds on this date carry synthetic timestamps from the MVP migration (upper bounds, not verified processor times)
+  totals USD: 4 payments, 2 captured = 150.00, succeeded refunds 30.00
+```
+
 ## Quick start
 
 ```bash
